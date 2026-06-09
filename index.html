@@ -147,6 +147,9 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
   color:#0b0d08;padding:7px 18px;font-weight:900;font-size:11px;letter-spacing:2px;
   text-transform:uppercase;pointer-events:none;opacity:0;transition:opacity .3s;z-index:999;
   clip-path:polygon(8px 0%,100% 0%,100% 100%,0% 100%,0% 8px)}
+#placing-banner{display:none;position:absolute;top:4px;left:50%;transform:translateX(-50%);
+  background:rgba(212,168,50,0.92);color:#0b0d08;padding:4px 14px;font-size:10px;font-weight:900;
+  letter-spacing:2px;z-index:10;pointer-events:none;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -195,7 +198,10 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
       <span id="cont-status" style="font-size:10px;color:var(--muted);letter-spacing:1px"></span>
     </div>
     <div class="resource-bar" id="res-cont"></div>
-    <div id="continent-map-wrap"><canvas id="continent-map"></canvas></div>
+    <div id="continent-map-wrap" style="position:relative">
+      <canvas id="continent-map"></canvas>
+      <div id="placing-banner">TAP GRID TO PLACE</div>
+    </div>
     <div class="screen-body" id="cont-body" style="padding-top:8px"></div>
   </div>
 
@@ -278,10 +284,25 @@ const COSTS={
   excellorantFactory:{metal:400, food:200},
   spaceport:         {metal:5000,food:2500},
 };
+// Building footprints: [w, h] in grid cells
+const FOOTPRINTS={
+  colonyCenter:      [2,2],
+  resourceCollector: [2,2],
+  barracks:          [2,2],
+  farm:              [3,3],
+  house:             [2,2],
+  researchCenter:    [2,2],
+  excellorantFactory:[2,1],
+  spaceport:         [3,3],
+};
 const SLOT_ORDER=['colonyCenter','resourceCollector','barracks','farm','house','researchCenter','excellorantFactory','spaceport'];
 
-// Troop definitions — rock-paper-scissors relationships:
-// Infantry beats Cavalry, Cavalry beats Tanks, Tanks beat Infantry
+// Grid constants
+const GCOLS=10, GROWS=7, CELL=50;
+const GRID_W=GCOLS*CELL; // 500
+const GRID_H=GROWS*CELL; // 350
+
+// Troop definitions
 const TROOP_TYPES={
   infantry:{name:'Infantry', icon:'🪖',role:'All-purpose. Strong vs Cavalry.',
     cost:{metal:15,food:8,pop:2},atk:1.0,def:1.0,
@@ -293,6 +314,17 @@ const TROOP_TYPES={
     cost:{metal:40,food:20,pop:3},atk:1.5,def:1.0,
     strong:'tanks',weak:'infantry',color:'#8888cc'},
 };
+
+// Ground troop research tree
+const TROOP_RESEARCH=[
+  {name:'Combat Drills I',  icon:'⚔',desc:'Infantry ATK +20%', cost:200, type:'infantry', stat:'atk', mult:1.20},
+  {name:'Combat Drills II', icon:'⚔',desc:'Infantry ATK +30%', cost:350, type:'infantry', stat:'atk', mult:1.30},
+  {name:'Veteran Infantry', icon:'🪖',desc:'Infantry DEF +25%', cost:300, type:'infantry', stat:'def', mult:1.25},
+  {name:'Reactive Armor',   icon:'🛡️',desc:'Tanks DEF +25%',    cost:250, type:'tanks',    stat:'def', mult:1.25},
+  {name:'Siege Cannon',     icon:'💥',desc:'Tanks ATK +20%',    cost:300, type:'tanks',    stat:'atk', mult:1.20},
+  {name:'Mounted Raiders',  icon:'🐎',desc:'Cavalry ATK +20%',  cost:200, type:'cavalry',  stat:'atk', mult:1.20},
+  {name:'Hit & Run',        icon:'💨',desc:'Cavalry take 15% fewer casualties', cost:350, type:'cavalry', stat:'cas', mult:0.85},
+];
 
 // Alien garrison templates
 function genAliens(threat,seed){
@@ -339,7 +371,11 @@ const state={
     {name:'Glacian Reach',   isHome:false,isAgri:false,col:[80,140,210],colonized:false},
     {name:'Obsidian Drift',  isHome:false,isAgri:false,col:[140,90,190],colonized:false},
   ],
-  selCont:0,selBldg:null,selSlot:-1,researchDone:new Set(),
+  selCont:0, selBldg:null, placing:null,
+  researchDone:new Set(),
+  troopResearchDone:new Set(),
+  overdrive:{},
+  _uid:0,
   invasion:{contIdx:0,lanes:[
     {inf:0,tnk:0,cav:0},{inf:0,tnk:0,cav:0},{inf:0,tnk:0,cav:0}
   ],phase:'deploy'},
@@ -358,12 +394,18 @@ const deployedTroops=()=>{
   return{infantry:l.reduce((a,x)=>a+x.inf,0),tanks:l.reduce((a,x)=>a+x.tnk,0),cavalry:l.reduce((a,x)=>a+x.cav,0)};
 };
 
+// UID helper
+function nextUid(){state._uid=(state._uid||0)+1;return state._uid;}
+
 // Production tick
 setInterval(()=>{
+  const now=Date.now();
   state.planet.continents.filter(c=>c.conquered).forEach(cont=>{
     cont.bldgs.forEach(b=>{
       const p=BUILDINGS[b.type].prod;if(!p)return;
-      const gain=p.base*b.level;
+      const od=state.overdrive[b.uid];
+      const mult=(od&&now<od)?3:1;
+      const gain=p.base*b.level*mult;
       if(p.res==='metal')      state.res.metal      =Math.min(999999,state.res.metal      +gain);
       if(p.res==='food')       state.res.food       =Math.min(999999,state.res.food       +gain);
       if(p.res==='pop')        state.res.pop        =Math.min(99999, state.res.pop        +gain);
@@ -428,14 +470,9 @@ function drawPlanet(canvas,[r,g,b],size,ring){
 }
 
 // ─────────────────────────────────────────────
-//  ROCKY TERRAIN (continent + invasion maps)
+//  ROCKY TERRAIN
 // ─────────────────────────────────────────────
 const CW=540,CH=252;
-const SLOT_DEFS=[
-  {x:22,y:110},{x:148,y:98},{x:278,y:106},{x:406,y:94},
-  {x:60,y:178},{x:188,y:170},{x:320,y:176},{x:450,y:166},
-];
-const PW=74,PH=42,PDEPTH=12;
 
 function drawRock(ctx,cx,cy,size,rng,r,g,b){
   const pts=9,verts=[];
@@ -499,56 +536,153 @@ function paintTerrain(ctx,W,H,rng,conquered,threat){
   }
 }
 
-function drawBuildingPad(ctx,s,bldg,selected){
-  const{x,y}=s;
-  ctx.fillStyle='rgba(0,0,0,0.5)';
-  ctx.beginPath();ctx.ellipse(x+PW/2,y+PH+PDEPTH+4,PW*.5,6,0,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#0f0e0a';
-  ctx.beginPath();ctx.moveTo(x+PW,y+4);ctx.lineTo(x+PW+7,y);ctx.lineTo(x+PW+7,y+PH+PDEPTH-4);
-  ctx.lineTo(x+PW,y+PH+PDEPTH);ctx.closePath();ctx.fill();
-  const fg=ctx.createLinearGradient(x,y+PH,x,y+PH+PDEPTH);
-  fg.addColorStop(0,bldg?'#35301e':'#211e14');fg.addColorStop(1,'#0c0b07');
-  ctx.fillStyle=fg;ctx.fillRect(x,y+PH,PW,PDEPTH);
-  ctx.strokeStyle='rgba(80,70,45,0.4)';ctx.lineWidth=1;ctx.strokeRect(x,y+PH,PW,PDEPTH);
-  const tg=ctx.createLinearGradient(x,y,x+PW*.3,y+PH);
-  if(selected){tg.addColorStop(0,'#4a3f1e');tg.addColorStop(.5,'#3a3218');tg.addColorStop(1,'#28260f');}
-  else if(bldg){tg.addColorStop(0,'#3a3318');tg.addColorStop(.5,'#2e2a14');tg.addColorStop(1,'#201f0e');}
-  else{tg.addColorStop(0,'#252018');tg.addColorStop(.5,'#1c1a10');tg.addColorStop(1,'#161409');}
-  ctx.fillStyle=tg;ctx.fillRect(x,y,PW,PH);
-  ctx.strokeStyle='rgba(0,0,0,0.3)';ctx.lineWidth=0.8;
-  ctx.beginPath();ctx.moveTo(x,y+PH/2);ctx.lineTo(x+PW,y+PH/2);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(x+PW/2,y);ctx.lineTo(x+PW/2,y+PH);ctx.stroke();
-  const bc=selected?'rgba(255,220,80,0.9)':bldg?'rgba(200,116,40,0.7)':'rgba(90,80,55,0.45)';
-  ctx.strokeStyle=bc;ctx.lineWidth=selected?2:1.5;ctx.strokeRect(x,y,PW,PH);
-  if(selected){ctx.strokeStyle='rgba(255,220,80,0.22)';ctx.lineWidth=5;ctx.strokeRect(x-2,y-2,PW+4,PH+4);}
-  ctx.font='bold 9px Courier New';ctx.textAlign='left';ctx.textBaseline='top';
-  ctx.fillStyle='rgba(200,116,40,0.55)';ctx.fillText(`P${SLOT_DEFS.indexOf(s)+1}`,x+3,y+2);
-  if(bldg){
-    const inf=BUILDINGS[bldg.type];
-    ctx.font=`${Math.floor(PH*.52)}px serif`;ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillText(inf.icon,x+PW/2,y+PH*.42);
-    ctx.font='900 8px Courier New';ctx.textAlign='center';ctx.textBaseline='bottom';
-    ctx.fillStyle=bldg.type==='spaceport'?'#5a8a3c':'#c87428';
-    ctx.fillText(`LVL ${bldg.level}`,x+PW/2,y+PH-2);
+// ─────────────────────────────────────────────
+//  FARM DRAW FUNCTION
+// ─────────────────────────────────────────────
+function drawFarm(ctx,px,py,pw,ph){
+  // Brown soil base
+  ctx.fillStyle='#2e1f08';
+  ctx.fillRect(px,py,pw,ph);
+  // Wheat stalks: 5 rows x 8 cols
+  const rows=5, cols=8;
+  const xStep=pw/(cols+1);
+  const yStep=ph/(rows+1);
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      const sx=px+(c+1)*xStep;
+      const sy=py+(r+1)*yStep;
+      const stalkH=ph*0.22;
+      // Stalk
+      ctx.strokeStyle='#7a6018';ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx,sy-stalkH);ctx.stroke();
+      // Green leaf at mid stalk
+      ctx.strokeStyle='#3a6018';ctx.lineWidth=1;
+      ctx.beginPath();
+      ctx.arc(sx,sy-stalkH*0.5,stalkH*0.22,Math.PI*1.6,Math.PI*0.1);
+      ctx.stroke();
+      // Grain head (ellipse)
+      ctx.fillStyle='#d4a832';
+      ctx.beginPath();
+      ctx.ellipse(sx,sy-stalkH-2,2,5,0,0,Math.PI*2);
+      ctx.fill();
+    }
+  }
+  // Top border
+  ctx.strokeStyle='rgba(212,168,50,0.5)';ctx.lineWidth=1;
+  ctx.strokeRect(px,py,pw,ph);
+}
+
+// ─────────────────────────────────────────────
+//  GRID-BASED CONTINENT MAP
+// ─────────────────────────────────────────────
+function footprintOccupies(bldg){
+  const[fw,fh]=FOOTPRINTS[bldg.type];
+  const cells=[];
+  for(let r=bldg.row;r<bldg.row+fh;r++)
+    for(let c=bldg.col;c<bldg.col+fw;c++)
+      cells.push(c*100+r);
+  return cells;
+}
+
+function gridOccupancyMap(cont){
+  const map={};
+  cont.bldgs.forEach(b=>{
+    footprintOccupies(b).forEach(key=>{map[key]=b;});
+  });
+  return map;
+}
+
+function canPlace(cont,col,row,type){
+  const[fw,fh]=FOOTPRINTS[type];
+  if(col+fw>GCOLS||row+fh>GROWS)return false;
+  const occ=gridOccupancyMap(cont);
+  for(let r=row;r<row+fh;r++)
+    for(let c=col;c<col+fw;c++)
+      if(occ[c*100+r])return false;
+  return true;
+}
+
+function drawGridBuilding(ctx,b,cellSize,now){
+  const[fw,fh]=FOOTPRINTS[b.type];
+  const px=b.col*cellSize, py=b.row*cellSize;
+  const pw=fw*cellSize, ph=fh*cellSize;
+  const info=BUILDINGS[b.type];
+
+  if(b.type==='farm'){
+    drawFarm(ctx,px,py,pw,ph);
   } else {
-    ctx.font='bold 18px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillStyle=selected?'rgba(255,220,80,0.8)':'rgba(200,116,40,0.32)';
-    ctx.fillText('+',x+PW/2,y+PH/2-1);
+    // Simple colored rect with emoji
+    const colors={
+      colonyCenter:'rgba(212,168,50,0.35)',
+      resourceCollector:'rgba(200,116,40,0.35)',
+      barracks:'rgba(90,138,60,0.35)',
+      house:'rgba(80,100,130,0.35)',
+      researchCenter:'rgba(130,80,180,0.35)',
+      excellorantFactory:'rgba(220,220,40,0.35)',
+      spaceport:'rgba(60,140,200,0.35)',
+    };
+    ctx.fillStyle=colors[b.type]||'rgba(100,100,100,0.35)';
+    ctx.fillRect(px,py,pw,ph);
+    ctx.strokeStyle='rgba(200,160,60,0.5)';ctx.lineWidth=1;
+    ctx.strokeRect(px,py,pw,ph);
+    // Emoji icon
+    const fontSize=Math.floor(Math.min(pw,ph)*0.42);
+    ctx.font=`${fontSize}px serif`;ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(info.icon,px+pw/2,py+ph/2-4);
+  }
+
+  // Level label
+  ctx.font='900 9px Courier New';ctx.textAlign='center';ctx.textBaseline='bottom';
+  ctx.fillStyle='#d4a832';
+  ctx.fillText(`Lv ${b.level}`,px+pw/2,py+ph-1);
+
+  // Overdrive glow
+  const od=state.overdrive[b.uid];
+  if(od&&now<od){
+    ctx.save();
+    ctx.shadowColor='rgba(255,220,50,0.9)';ctx.shadowBlur=12;
+    ctx.strokeStyle='rgba(255,220,50,0.85)';ctx.lineWidth=2.5;
+    ctx.strokeRect(px+1,py+1,pw-2,ph-2);
+    ctx.restore();
   }
 }
 
-function drawContinentMap(canvas,cont,selSlot){
-  canvas.width=CW;canvas.height=CH;
+function drawContinentMap(canvas,cont){
+  canvas.width=GRID_W; canvas.height=GRID_H;
   const ctx=canvas.getContext('2d');
   const rng=mkRng(strSeed(cont.name));
-  paintTerrain(ctx,CW,CH,rng,cont.conquered,cont.threat);
+
   if(cont.conquered){
-    SLOT_DEFS.forEach((s,i)=>drawBuildingPad(ctx,s,cont.bldgs.find(b=>b.slot===i)||null,selSlot===i));
+    // Terrain background (scaled to grid size)
+    paintTerrain(ctx,GRID_W,GRID_H,rng,true,cont.threat);
+
+    // Grid lines overlay
+    ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=0.8;
+    for(let c=0;c<=GCOLS;c++){ctx.beginPath();ctx.moveTo(c*CELL,0);ctx.lineTo(c*CELL,GRID_H);ctx.stroke();}
+    for(let r=0;r<=GROWS;r++){ctx.beginPath();ctx.moveTo(0,r*CELL);ctx.lineTo(GRID_W,r*CELL);ctx.stroke();}
+
+    // Placing highlight
+    if(state.placing){
+      const[fw,fh]=FOOTPRINTS[state.placing];
+      ctx.fillStyle='rgba(212,168,50,0.06)';
+      for(let r2=0;r2<=GROWS-fh;r2++)
+        for(let c2=0;c2<=GCOLS-fw;c2++){
+          if(canPlace(cont,c2,r2,state.placing)){
+            ctx.fillRect(c2*CELL,r2*CELL,fw*CELL,fh*CELL);
+          }
+        }
+    }
+
+    const now=Date.now();
+    cont.bldgs.forEach(b=>drawGridBuilding(ctx,b,CELL,now));
+  } else {
+    paintTerrain(ctx,GRID_W,GRID_H,rng,false,cont.threat);
   }
+
   ctx.font='900 11px Courier New';ctx.textAlign='left';ctx.textBaseline='top';
   ctx.fillStyle='rgba(200,116,40,0.5)';ctx.fillText(cont.name.toUpperCase(),10,8);
   ctx.strokeStyle=cont.conquered?'rgba(90,138,60,0.3)':'rgba(192,48,16,0.28)';
-  ctx.lineWidth=1.5;ctx.strokeRect(0,0,CW,CH);
+  ctx.lineWidth=1.5;ctx.strokeRect(0,0,GRID_W,GRID_H);
 }
 
 // ─────────────────────────────────────────────
@@ -556,7 +690,6 @@ function drawContinentMap(canvas,cont,selSlot){
 // ─────────────────────────────────────────────
 const LANE_NAMES=['LEFT FLANK','CENTER','RIGHT FLANK'];
 const LANE_COLORS=['rgba(90,138,60,0.5)','rgba(200,116,40,0.5)','rgba(90,138,60,0.5)'];
-let battleAnimId=null;
 
 function drawInvasionMap(canvas,aliens,phase,laneResults){
   const W=CW,H=180;
@@ -566,35 +699,30 @@ function drawInvasionMap(canvas,aliens,phase,laneResults){
   const rng=mkRng(strSeed(cont.name+'battle'));
   paintTerrain(ctx,W,H,rng,false,cont.threat);
 
-  // 3 lane dividers
   const laneW=W/3;
   for(let i=1;i<3;i++){
     ctx.strokeStyle='rgba(200,116,40,0.2)';ctx.lineWidth=1;ctx.setLineDash([4,4]);
     ctx.beginPath();ctx.moveTo(laneW*i,0);ctx.lineTo(laneW*i,H);ctx.stroke();ctx.setLineDash([]);
   }
 
-  // Lane labels + alien/player unit icons
   LANE_NAMES.forEach((lname,li)=>{
     const lx=laneW*li,cx2=lx+laneW/2;
     ctx.font='900 9px Courier New';ctx.textAlign='center';ctx.textBaseline='top';
     ctx.fillStyle=LANE_COLORS[li];ctx.fillText(lname,cx2,6);
 
     if(phase==='deploy'){
-      // Alien icons — defender side (right of each lane)
       const aDist=aliens.lanes[li];
       const icons=[];
       for(let i=0;i<Math.min(5,Math.ceil(aDist.infantry/30));i++)icons.push({icon:'🔴',x:lx+laneW*.78-i*11,y:H*.42});
       for(let i=0;i<Math.min(4,Math.ceil(aDist.tanks/15));i++)   icons.push({icon:'🟠',x:lx+laneW*.82-i*11,y:H*.58});
       for(let i=0;i<Math.min(4,Math.ceil(aDist.cavalry/10));i++) icons.push({icon:'🟡',x:lx+laneW*.7-i*11, y:H*.72});
       icons.forEach(ic=>{ctx.font='13px serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(ic.icon,ic.x,ic.y);});
-      // Deploy zone marker
       ctx.strokeStyle='rgba(90,138,60,0.3)';ctx.lineWidth=1;
       ctx.strokeRect(lx+4,H*.35,laneW*.55,H*.5);
       ctx.font='8px Courier New';ctx.textAlign='left';ctx.textBaseline='top';
       ctx.fillStyle='rgba(90,138,60,0.5)';ctx.fillText('DEPLOY ZONE',lx+6,H*.35+2);
 
     } else if(phase==='battle'||phase==='done'){
-      // results
       const res=laneResults&&laneResults[li];
       if(res){
         const winColor=res.win?'rgba(90,138,60,0.8)':'rgba(192,48,16,0.8)';
@@ -630,7 +758,7 @@ function troopHTML(){
     <div class="troop-badge" style="color:#8888cc">🐎 ${fmt(t.cavalry)}</div>`;
 }
 function renderAllResBars(){
-  ['res-home','res-troops','res-cont','res-troops'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=resHTML();});
+  ['res-home','res-troops','res-cont'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=resHTML();});
   const ti=document.getElementById('troop-bar-inv');if(ti)ti.innerHTML=troopHTML();
 }
 
@@ -646,14 +774,13 @@ function renderHome(){
   drawPlanet(document.getElementById('home-planet'),[200,116,40],140,true);
   const list=document.getElementById('continent-list');list.innerHTML='';
   state.planet.continents.forEach((cont,i)=>{
-    const hasBrk=cont.conquered&&cont.bldgs.find(b=>b.type==='barracks');
     const div=document.createElement('div');
     div.innerHTML=`<div class="panel ${cont.conquered?'mil':'blood'}" style="cursor:pointer;margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:18px">${cont.conquered?'✅':'💀'}</span>
         <div style="flex:1">
           <div style="font-size:13px;font-weight:900;letter-spacing:1px;text-transform:uppercase">${cont.name}</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">${cont.conquered?`${cont.bldgs.length}/8 structures built`:`THREAT: ${cont.threat} · ${cont.aliens?cont.aliens.infantry+cont.aliens.tanks+cont.aliens.cavalry:0} defenders`}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${cont.conquered?`${cont.bldgs.length} structures built`:`THREAT: ${cont.threat} · ${cont.aliens?cont.aliens.infantry+cont.aliens.tanks+cont.aliens.cavalry:0} defenders`}</div>
         </div><span style="color:var(--muted);font-size:18px">›</span>
       </div></div>`;
     div.onclick=()=>openContinent(i);list.appendChild(div);
@@ -677,7 +804,6 @@ function renderTroopsBody(){
   const t=state.troops;
   const body=document.getElementById('troops-body');
 
-  // Troop strength summary
   const totalAtk=(t.infantry*1.0+t.tanks*1.8+t.cavalry*1.5).toFixed(0);
   body.innerHTML=`
     <div class="panel gold mb8">
@@ -703,7 +829,6 @@ function renderTroopsBody(){
     </div>
     <div class="sec-label">Train Troops</div>`;
 
-  // Need barracks check
   const hasBrk=state.planet.continents.some(c=>c.conquered&&c.bldgs.find(b=>b.type==='barracks'));
   if(!hasBrk){
     body.innerHTML+=`<div class="panel blood"><div class="small-muted">// NO BARRACKS //</div>
@@ -763,7 +888,8 @@ function trainTroops(key){
 //  CONTINENT SCREEN
 // ─────────────────────────────────────────────
 function openContinent(idx){
-  state.selCont=idx;state.selSlot=-1;
+  state.selCont=idx;
+  state.placing=null;
   const cont=state.planet.continents[idx];
   document.getElementById('cont-title').textContent=cont.name.toUpperCase();
   document.getElementById('cont-status').textContent=cont.conquered?'SECURED':'HOSTILE';
@@ -776,7 +902,10 @@ function openContinent(idx){
 
 function refreshContMap(){
   const canvas=document.getElementById('continent-map');
-  drawContinentMap(canvas,state.planet.continents[state.selCont],state.selSlot);
+  const cont=state.planet.continents[state.selCont];
+  drawContinentMap(canvas,cont);
+  const banner=document.getElementById('placing-banner');
+  if(banner) banner.style.display=state.placing?'block':'none';
 }
 
 function setupMapClick(){
@@ -787,15 +916,30 @@ function setupMapClick(){
     const rect=canvas.getBoundingClientRect();
     const sx=canvas.width/rect.width,sy=canvas.height/rect.height;
     const cx=(touch.clientX-rect.left)*sx,cy=(touch.clientY-rect.top)*sy;
-    if(!state.planet.continents[state.selCont].conquered)return;
-    for(let i=0;i<SLOT_DEFS.length;i++){
-      const s=SLOT_DEFS[i];
-      if(cx>=s.x-4&&cx<=s.x+PW+10&&cy>=s.y-4&&cy<=s.y+PH+PDEPTH+4){
-        state.selSlot=i;refreshContMap();
-        const bldg=state.planet.continents[state.selCont].bldgs.find(b=>b.slot===i);
-        bldg?openBuilding(bldg,state.selCont):showBuildMenu(state.selCont,i);
-        return;
+    const cont=state.planet.continents[state.selCont];
+    if(!cont.conquered)return;
+
+    const col=Math.floor(cx/CELL);
+    const row=Math.floor(cy/CELL);
+    if(col<0||col>=GCOLS||row<0||row>=GROWS)return;
+
+    if(state.placing){
+      // Try to place building at (col, row)
+      const type=state.placing;
+      if(!canPlace(cont,col,row,type)){
+        toast('// INVALID PLACEMENT //');return;
       }
+      buildStructure(state.selCont,col,row,type);
+      return;
+    }
+
+    // Check if tapping occupied cell
+    const occ=gridOccupancyMap(cont);
+    const bldg=occ[col*100+row];
+    if(bldg){
+      openBuilding(bldg,state.selCont);
+    } else {
+      showBuildMenu(state.selCont,col,row);
     }
   };
 }
@@ -810,12 +954,12 @@ function renderContBody(){
         <button class="gal-btn mil" onclick="openTroops(${state.selCont})">
           <div class="gal-btn-inner" style="padding:7px 14px;font-size:11px">🪖 Manage Troops</div>
         </button>
+        ${state.placing?`<button class="gal-btn blood" onclick="cancelPlacing()"><div class="gal-btn-inner" style="padding:7px 14px;font-size:11px">✕ Cancel</div></button>`:''}
       </div>
       <div class="panel steel">
         <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);letter-spacing:1px">
-          <span>STRUCTURES</span><span style="color:var(--rust)">${built}/8 BUILT</span></div>
-        <div class="prog-wrap"><div class="prog-fill" style="background:var(--rust);width:${built/8*100}%"></div></div>
-        <div style="font-size:11px;color:var(--muted);margin-top:8px">Tap any plot on the terrain above to build or inspect a structure.</div>
+          <span>STRUCTURES</span><span style="color:var(--rust)">${built} BUILT</span></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">${state.placing?`<span style="color:var(--gold);font-weight:900">PLACING: ${BUILDINGS[state.placing].name.toUpperCase()}</span> — Tap the grid to place.`:'Tap any empty cell on the grid above to build. Tap a building to inspect.'}</div>
       </div>`;
   } else {
     const al=cont.aliens||{infantry:0,tanks:0,cavalry:0};
@@ -843,40 +987,59 @@ function renderContBody(){
   }
 }
 
+function cancelPlacing(){
+  state.placing=null;
+  refreshContMap();
+  renderContBody();
+}
+
 // ─────────────────────────────────────────────
 //  BUILD MENU
 // ─────────────────────────────────────────────
-function showBuildMenu(contIdx,slotIdx){
+function showBuildMenu(contIdx,col,row){
   const cont=state.planet.continents[contIdx];
   const builtTypes=new Set(cont.bldgs.map(b=>b.type));
   const avail=SLOT_ORDER.filter(k=>!builtTypes.has(k)&&!(k==='spaceport'&&!spUnlocked()));
-  document.getElementById('modal-title').textContent=`BUILD — PLOT ${slotIdx+1}`;
+  document.getElementById('modal-title').textContent=`BUILD — CELL (${col},${row})`;
   document.getElementById('modal-body').innerHTML=avail.length===0
     ?`<div class="small-muted center">All structures already built on this continent.</div>`
     :avail.map(key=>{
       const info=BUILDINGS[key],c=COSTS[key];
+      const[fw,fh]=FOOTPRINTS[key];
       const can=state.res.metal>=c.metal&&state.res.food>=c.food;
       return `<div class="build-item" style="${can?'':'opacity:0.5'}">
         <span style="font-size:22px;width:32px;text-align:center">${info.icon}</span>
         <div style="flex:1">
           <div class="bi-name">${info.name}</div>
+          <div style="font-size:9px;color:var(--muted);margin-top:1px">${fw}×${fh} cells</div>
           <div class="bi-cost">⛏ ${c.metal} Metal &nbsp; 🌾 ${c.food} Food${info.prod?` &nbsp;<span style="color:var(--mil)">↑ ${info.prod.res}</span>`:''}</div>
         </div>
-        <button class="gal-btn ${can?'mil':'steel'}" onclick="buildStructure(${contIdx},${slotIdx},'${key}')">
-          <div class="gal-btn-inner" style="padding:6px 12px;font-size:10px">BUILD</div>
+        <button class="gal-btn ${can?'mil':'steel'}" onclick="startPlacing('${key}')">
+          <div class="gal-btn-inner" style="padding:6px 12px;font-size:10px">PLACE</div>
         </button>
       </div>`;
     }).join('');
   document.getElementById('modal-overlay').classList.add('open');
 }
 
-function buildStructure(contIdx,slotIdx,type){
+function startPlacing(type){
+  closeModal();
+  state.placing=type;
+  refreshContMap();
+  renderContBody();
+}
+
+function buildStructure(contIdx,col,row,type){
   const c=COSTS[type];
   if(state.res.metal<c.metal||state.res.food<c.food){toast('// INSUFFICIENT RESOURCES //');return;}
   state.res.metal-=c.metal;state.res.food-=c.food;
-  state.planet.continents[contIdx].bldgs.push({type,level:1,slot:slotIdx});
-  closeModal();toast(`// ${BUILDINGS[type].short} CONSTRUCTED //`);
-  renderHome();state.selSlot=-1;refreshContMap();renderContBody();
+  const uid=nextUid();
+  state.planet.continents[contIdx].bldgs.push({type,level:1,col,row,uid});
+  state.placing=null;
+  toast(`// ${BUILDINGS[type].short} CONSTRUCTED //`);
+  renderHome();
+  refreshContMap();
+  renderContBody();
 }
 
 // ─────────────────────────────────────────────
@@ -886,12 +1049,10 @@ function openInvasion(contIdx){
   state.invasion.contIdx=contIdx;
   state.invasion.phase='deploy';
   state.invasion.laneResults=null;
-  // Reset lane deployments
   state.invasion.lanes=[{inf:0,tnk:0,cav:0},{inf:0,tnk:0,cav:0},{inf:0,tnk:0,cav:0}];
 
   const cont=state.planet.continents[contIdx];
   const al=cont.aliens;
-  // Distribute alien defenders across 3 lanes
   const rng=mkRng(strSeed(cont.name+'lanes'));
   const split=(total)=>{
     const a=Math.floor(total*(.3+rng()*.25)),b=Math.floor(total*(.3+rng()*.2)),c=total-a-b;
@@ -919,8 +1080,6 @@ function openInvasion(contIdx){
 
 function refreshInvasionMap(){
   const canvas=document.getElementById('invasion-map');
-  const cont=state.planet.continents[state.invasion.contIdx];
-  const W=document.getElementById('invasion-map-wrap').offsetWidth||CW;
   canvas.style.width='100%';
   drawInvasionMap(canvas,{lanes:state.invasion.alienLanes},state.invasion.phase,state.invasion.laneResults);
 }
@@ -928,14 +1087,10 @@ function refreshInvasionMap(){
 function renderLaneGrid(){
   const grid=document.getElementById('lane-grid');
   const t=state.troops;
-  const deployed=deployedTroops();
-  const avail={infantry:t.infantry-deployed.infantry,tanks:t.tanks-deployed.tanks,cavalry:t.cavalry-deployed.cavalry};
-
   if(state.invasion.phase!=='deploy'){grid.innerHTML='';return;}
 
   grid.innerHTML=state.invasion.lanes.map((lane,li)=>{
     const en=state.invasion.alienLanes[li];
-    const enTotal=en.infantry+en.tanks+en.cavalry;
     const attackPow=(lane.inf*1.0+lane.tnk*1.8+lane.cav*1.5).toFixed(0);
     const defPow=(en.infantry*1.0+en.tanks*2.2+en.cavalry*1.3).toFixed(0);
     const advColor=attackPow>=defPow?'var(--mil)':'var(--blood)';
@@ -947,7 +1102,6 @@ function renderLaneGrid(){
           tanks:{icon:'🛡️',field:'tnk',color:'var(--rust)'},
           cavalry:{icon:'🐎',field:'cav',color:'#8888cc'}}[ut];
         const val=lane[utInst.field];
-        const av=t[ut]-(state.invasion.lanes.reduce((a,l)=>a+l[utInst.field],0)-val);
         return `<div class="lane-unit-row">
           <span class="lane-unit-icon">${utInst.icon}</span>
           <div class="lane-qty-ctrl">
@@ -994,6 +1148,18 @@ function renderInvBody(){
   }
 }
 
+// Apply troop research bonuses
+function getTroopBonuses(){
+  const b={infantry:{atk:1,def:1,cas:1},tanks:{atk:1,def:1,cas:1},cavalry:{atk:1,def:1,cas:1}};
+  state.troopResearchDone.forEach(idx=>{
+    const r=TROOP_RESEARCH[idx];
+    if(r.stat==='atk') b[r.type].atk*=r.mult;
+    else if(r.stat==='def') b[r.type].def*=r.mult;
+    else if(r.stat==='cas') b[r.type].cas*=r.mult;
+  });
+  return b;
+}
+
 function engageInvasion(){
   const dep=deployedTroops();
   if(dep.infantry+dep.tanks+dep.cavalry===0){toast('// DEPLOY TROOPS FIRST //');return;}
@@ -1001,32 +1167,29 @@ function engageInvasion(){
   document.getElementById('inv-phase').textContent='BATTLE';
   renderLaneGrid();
 
-  // Resolve combat per lane
+  const bon=getTroopBonuses();
+
   const results=state.invasion.lanes.map((lane,li)=>{
     const en=state.invasion.alienLanes[li];
-    // Attack power with type advantages
     let atk=0;
-    atk+=lane.inf*1.0*(en.cavalry>en.tanks?1.4:1.0);   // inf strong vs cav
-    atk+=lane.tnk*1.8*(en.infantry>en.cavalry?1.4:1.0); // tnk strong vs inf
-    atk+=lane.cav*1.5*(en.tanks>en.infantry?1.5:1.0);   // cav strong vs tnk
-    // Defense power
+    atk+=lane.inf*1.0*bon.infantry.atk*(en.cavalry>en.tanks?1.4:1.0);
+    atk+=lane.tnk*1.8*bon.tanks.atk*(en.infantry>en.cavalry?1.4:1.0);
+    atk+=lane.cav*1.5*bon.cavalry.atk*(en.tanks>en.infantry?1.5:1.0);
     let def=0;
-    def+=en.infantry*1.0*(lane.cav>lane.tnk?1.3:1.0);   // alien inf vs player cav
-    def+=en.tanks*2.2*(lane.inf>lane.cav?1.3:1.0);       // alien tnk vs player inf
-    def+=en.cavalry*1.3*(lane.tnk>lane.inf?1.2:1.0);     // alien cav vs player tnk
+    def+=en.infantry*1.0*(lane.cav>lane.tnk?1.3:1.0);
+    def+=en.tanks*2.2*(lane.inf>lane.cav?1.3:1.0);
+    def+=en.cavalry*1.3*(lane.tnk>lane.inf?1.2:1.0);
     const deployed=lane.inf+lane.tnk+lane.cav;
     const win=atk>=def*0.8||(deployed===0?false:atk>def*0.6);
-    // Calculate casualties (25-45% of deployed on win, 60-85% on loss)
     const casRate=win?(0.25+Math.random()*.2):(0.60+Math.random()*.25);
     const infLost=Math.floor(lane.inf*casRate);
     const tnkLost=Math.floor(lane.tnk*casRate);
-    const cavLost=Math.floor(lane.cav*casRate);
+    const cavLost=Math.floor(lane.cav*casRate*bon.cavalry.cas);
     return{win,atk:atk.toFixed(0),def:def.toFixed(0),infLost,tnkLost,cavLost,lane:li};
   });
 
   state.invasion.laneResults=results;
 
-  // Deduct casualties + determine overall victory
   let totalInfLost=0,totalTnkLost=0,totalCavLost=0;
   results.forEach(r=>{totalInfLost+=r.infLost;totalTnkLost+=r.tnkLost;totalCavLost+=r.cavLost;});
   state.troops.infantry=Math.max(0,state.troops.infantry-totalInfLost);
@@ -1038,7 +1201,6 @@ function engageInvasion(){
 
   refreshInvasionMap();
 
-  // Battle log
   const body=document.getElementById('inv-body');
   let log='';
   results.forEach(r=>{
@@ -1086,16 +1248,22 @@ function openBuilding(bldg,contIdx){
   const info=BUILDINGS[bldg.type];
   const upgCost=120*bldg.level*bldg.level;
   document.getElementById('bld-title').textContent=info.short;
-  document.getElementById('bld-back').onclick=()=>{state.selSlot=-1;refreshContMap();showScreen('continent');};
+  document.getElementById('bld-back').onclick=()=>{refreshContMap();showScreen('continent');};
+
   let prodHTML='';
   if(info.prod){
     const rate=info.prod.base*bldg.level;
+    const od=state.overdrive[bldg.uid];
+    const odActive=od&&Date.now()<od;
     prodHTML=`<div class="panel mil mb12">
       <div style="font-size:10px;letter-spacing:2px;color:var(--mil);font-weight:900;margin-bottom:4px">PRODUCTION</div>
-      <div style="font-size:13px">+${rate} <span style="color:var(--muted)">${info.prod.res.toUpperCase()}</span> per cycle (3s)</div>
+      <div style="font-size:13px">+${rate} <span style="color:var(--muted)">${info.prod.res.toUpperCase()}</span> per cycle (3s)
+        ${odActive?`<span style="color:var(--gold);font-weight:900;margin-left:6px">⚡ OVERDRIVE ×3</span>`:''}
+      </div>
       <div style="font-size:11px;color:var(--muted);margin-top:2px">Next level output: ${rate+info.prod.base} per cycle</div>
     </div>`;
   }
+
   let rosterHTML='';
   if(bldg.type==='barracks'){
     rosterHTML=`<div class="sec-label">Trainable Units</div>
@@ -1116,22 +1284,64 @@ function openBuilding(bldg,contIdx){
         <div style="font-size:11px;color:var(--muted)">${s.role}</div></div></div>`).join('')}</div>`;
   }
   if(bldg.type==='researchCenter'){
-    rosterHTML=`<div class="sec-label">Ship Research</div><div class="panel mb12">
-      ${RESEARCH.map((r,i)=>{const done=state.researchDone.has(i);
-        return`<div class="roster-row" style="align-items:center">
-          <span style="font-size:18px;width:24px">${r.icon}</span>
-          <div style="flex:1"><div style="font-size:11px;font-weight:900;text-transform:uppercase;${done?'color:var(--muted)':''}">${r.name}</div>
-          <div style="font-size:10px;color:var(--muted)">${r.desc} · ${r.cost} Research</div></div>
-          <button class="gal-btn ${done?'rust':'mil'}" onclick="doResearch(${i},${r.cost})" style="margin-left:6px">
-            <div class="gal-btn-inner" style="padding:5px 9px;font-size:9px">${done?'✓':'RESEARCH'}</div>
-          </button></div>`;}).join('')}</div>`;
+    rosterHTML=`
+      <div class="sec-label">Ship Research</div>
+      <div class="panel mb12">
+        ${RESEARCH.map((r,i)=>{const done=state.researchDone.has(i);
+          return`<div class="roster-row" style="align-items:center">
+            <span style="font-size:18px;width:24px">${r.icon}</span>
+            <div style="flex:1"><div style="font-size:11px;font-weight:900;text-transform:uppercase;${done?'color:var(--muted)':''}">${r.name}</div>
+            <div style="font-size:10px;color:var(--muted)">${r.desc} · ${r.cost} Research</div></div>
+            <button class="gal-btn ${done?'rust':'mil'}" onclick="doResearch(${i},${r.cost})" style="margin-left:6px">
+              <div class="gal-btn-inner" style="padding:5px 9px;font-size:9px">${done?'✓':'RESEARCH'}</div>
+            </button></div>`;}).join('')}
+      </div>
+      <div class="sec-label" style="color:var(--mil);border-color:var(--mil)">Ground Forces Research</div>
+      <div class="panel mb12">
+        ${TROOP_RESEARCH.map((r,i)=>{const done=state.troopResearchDone.has(i);
+          return`<div class="roster-row" style="align-items:center">
+            <span style="font-size:18px;width:24px">${r.icon}</span>
+            <div style="flex:1"><div style="font-size:11px;font-weight:900;text-transform:uppercase;${done?'color:var(--muted)':''}">${r.name}</div>
+            <div style="font-size:10px;color:var(--muted)">${r.desc} · ${r.cost} Research</div></div>
+            <button class="gal-btn ${done?'steel':'mil'}" onclick="doTroopResearch(${i},${r.cost})" style="margin-left:6px">
+              <div class="gal-btn-inner" style="padding:5px 9px;font-size:9px">${done?'✓':'RESEARCH'}</div>
+            </button></div>`;}).join('')}
+      </div>`;
   }
+
+  // Overdrive button for production buildings
+  let overdriveHTML='';
+  if(info.prod){
+    const odCost=5*bldg.level;
+    const od=state.overdrive[bldg.uid];
+    const odActive=od&&Date.now()<od;
+    const secsLeft=odActive?Math.ceil((od-Date.now())/1000):0;
+    overdriveHTML=`<div class="panel gold mb12">
+      <div style="font-size:10px;letter-spacing:2px;color:var(--gold);font-weight:900;margin-bottom:6px">// EXCELLORANT OVERDRIVE //</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Triple production output for 30 seconds. Cost: <span style="color:var(--gold);font-weight:900">${odCost} Excellorant</span></div>
+      ${odActive
+        ?`<div class="center"><div style="color:var(--gold);font-weight:900;font-size:13px;letter-spacing:2px">⚡ ACTIVE — ${secsLeft}s remaining</div></div>`
+        :`<div class="center"><button class="gal-btn gold" onclick="activateOverdrive('${bldg.uid}',${odCost})">
+            <div class="gal-btn-inner">⚡ OVERDRIVE (${odCost} ⚡)</div>
+          </button></div>`}
+    </div>`;
+  }
+
+  // Farm visual preview
+  let farmPreview='';
+  if(bldg.type==='farm'){
+    farmPreview=`<div style="display:flex;justify-content:center;margin-bottom:12px">
+      <canvas id="farm-preview" width="120" height="80" style="border:1px solid rgba(212,168,50,0.3)"></canvas>
+    </div>`;
+  }
+
   document.getElementById('bld-body').innerHTML=`
     <div class="center" style="padding:18px 0 10px">
       <div style="font-size:50px;filter:drop-shadow(0 0 8px rgba(200,116,40,0.5))">${info.icon}</div>
       <div style="font-size:17px;font-weight:900;letter-spacing:3px;text-transform:uppercase;color:var(--rust);text-shadow:0 0 8px rgba(200,116,40,0.5);margin-top:8px">${info.name.toUpperCase()}</div>
       <div style="font-size:12px;color:var(--mil);font-family:monospace;margin-top:4px;letter-spacing:2px">LEVEL ${bldg.level}</div>
     </div>
+    ${farmPreview}
     <div class="panel steel mb12"><p class="small-muted">${info.summary}</p></div>
     ${prodHTML}
     <div class="panel rust mb12">
@@ -1140,8 +1350,17 @@ function openBuilding(bldg,contIdx){
       <div class="prog-wrap mb8"><div class="prog-fill" style="background:var(--rust);width:${Math.min(100,bldg.level*8)}%"></div></div>
       <div class="center"><button class="gal-btn rust" onclick="upgradeBuilding()"><div class="gal-btn-inner">⬆ Upgrade → Lv ${bldg.level+1}</div></button></div>
     </div>
+    ${overdriveHTML}
     ${rosterHTML}`;
+
   showScreen('building');
+
+  if(bldg.type==='farm'){
+    setTimeout(()=>{
+      const fc=document.getElementById('farm-preview');
+      if(fc){const fctx=fc.getContext('2d');drawFarm(fctx,0,0,120,80);}
+    },10);
+  }
 }
 
 function upgradeBuilding(){
@@ -1157,6 +1376,22 @@ function doResearch(idx,cost){
   if(state.res.research<cost){toast(`// NEED ${cost} RESEARCH //`);return;}
   state.res.research-=cost;state.researchDone.add(idx);
   toast(`// ${RESEARCH[idx].name.toUpperCase()} UNLOCKED //`);
+  openBuilding(state.selBldg,state.selCont);
+}
+
+function doTroopResearch(idx,cost){
+  if(state.troopResearchDone.has(idx)){toast('// ALREADY RESEARCHED //');return;}
+  if(state.res.research<cost){toast(`// NEED ${cost} RESEARCH //`);return;}
+  state.res.research-=cost;state.troopResearchDone.add(idx);
+  toast(`// ${TROOP_RESEARCH[idx].name.toUpperCase()} UNLOCKED //`);
+  openBuilding(state.selBldg,state.selCont);
+}
+
+function activateOverdrive(uid,cost){
+  if(state.res.excellorant<cost){toast(`// NEED ${cost} EXCELLORANT //`);return;}
+  state.res.excellorant-=cost;
+  state.overdrive[uid]=Date.now()+30000;
+  toast('// OVERDRIVE ACTIVATED — 30s //');
   openBuilding(state.selBldg,state.selCont);
 }
 

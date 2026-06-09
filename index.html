@@ -2047,7 +2047,6 @@ initEconomyV3();
 applyNewBuildingData();
 renderHome();
 initPixi();
-if(typeof initResearchV2==='function'){ initResearchV2(); patchResearchCenterBuilding(); }
 if(typeof initFleet==='function'){ initFleet(); startShipBuildInterval(); }
 
 // ═══ GLOBE VIEW ═══
@@ -6455,9 +6454,11 @@ function scrapShip(shipId) {
 // Call initFleet() and startShipBuildInterval() from main game init
 // Call applyFleetUpkeep() from the main resource tick function
 
-// ─── Init on load ────────────────────────────────────────────────────────────
+// ─── Init on load (after all const declarations are initialized) ──────────────
 initFleet();
 startShipBuildInterval();
+initResearchV2();
+patchResearchCenterBuilding();
 
 
 </script>

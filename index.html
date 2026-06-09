@@ -2048,134 +2048,38 @@ if(typeof initFleet==='function'){ initFleet(); startShipBuildInterval(); }
 
 (function(){
 
-
-
-// ── biome palette per continent index — vivid so they read against dark space ──
+// ── biome palette ──
 const BIOME_COLORS=[
-  {base:'#2a6e2a', mid:'#3a9e3a', hi:'#60c850', name:'JUNGLE'},   // 0 vivid green
-  {base:'#8a6020', mid:'#c08830', hi:'#e0b050', name:'DESERT'},    // 1 warm amber
-  {base:'#304870', mid:'#4870a8', hi:'#70a0d8', name:'ARCTIC'},    // 2 ice blue
-  {base:'#7a1010', mid:'#b02020', hi:'#e04030', name:'VOLCANIC'},  // 3 bright red
-  {base:'#0e5070', mid:'#1880a0', hi:'#30b0d0', name:'OCEAN'},     // 4 bright teal
+  {base:'#2a6e2a', mid:'#3a9e3a', hi:'#60c850', name:'JUNGLE'},
+  {base:'#8a6020', mid:'#c08830', hi:'#e0b050', name:'DESERT'},
+  {base:'#304870', mid:'#4870a8', hi:'#70a0d8', name:'ARCTIC'},
+  {base:'#7a1010', mid:'#b02020', hi:'#e04030', name:'VOLCANIC'},
+  {base:'#0e5070', mid:'#1880a0', hi:'#30b0d0', name:'OCEAN'},
 ];
 
-const BLDG_ICONS={
-  farm:'🌾', powerRelay:'⚡', barracks:'🏛', researchCenter:'⚛',
-  storehouse:'📦', tradePost:'💰', defenseGrid:'🛡', terraformer:'🔧', spaceport:'🚀',
-};
-const BLDG_PRIORITY=['spaceport','researchCenter','defenseGrid','barracks','powerRelay','terraformer','tradePost','storehouse','farm'];
+// ── continent blob shapes (asymmetric border-radius for organic look) ──
+const BLOB_SHAPES=[
+  '42% 58% 55% 45% / 55% 42% 58% 45%',
+  '58% 42% 38% 62% / 42% 60% 40% 58%',
+  '30% 70% 62% 38% / 58% 38% 30% 70%',
+  '52% 48% 32% 68% / 40% 62% 52% 48%',
+  '68% 32% 50% 50% / 38% 62% 50% 50%',
+];
 
-// ── seeded continent polygon generation ──
-function _genContPoly(seed, cx, cy, rx, ry, pts){
-  const rng=mkRng(strSeed(seed));
-  const poly=[];
-  for(let i=0;i<pts;i++){
-    const angle=(i/pts)*Math.PI*2 - Math.PI/2;
-    const jitter=0.55+rng()*0.90; // 0.55–1.45 radial multiplier
-    const angOff=(rng()-0.5)*(Math.PI/pts)*0.7;
-    const r_x=rx*jitter;
-    const r_y=ry*jitter;
-    poly.push([
-      cx + Math.cos(angle+angOff)*r_x,
-      cy + Math.sin(angle+angOff)*r_y,
-    ]);
-  }
-  return poly;
-}
+// continent positions on planet (fractions of pradius, matching old _getContLayouts)
+const CONT_OFFSETS=[
+  {dx:-0.38,dy:-0.30,rw:0.28,rh:0.23},
+  {dx: 0.35,dy:-0.28,rw:0.25,rh:0.22},
+  {dx:-0.10,dy: 0.05,rw:0.30,rh:0.24},
+  {dx:-0.42,dy: 0.38,rw:0.22,rh:0.20},
+  {dx: 0.38,dy: 0.32,rw:0.26,rh:0.21},
+];
 
-// smooth polygon path (Catmull-Rom style via midpoints)
-function _polyPath(ctx, pts){
-  if(pts.length<3){ctx.beginPath();return;}
-  ctx.beginPath();
-  const n=pts.length;
-  for(let i=0;i<n;i++){
-    const p0=pts[(i-1+n)%n];
-    const p1=pts[i];
-    const p2=pts[(i+1)%n];
-    const p3=pts[(i+2)%n];
-    if(i===0) ctx.moveTo(p1[0],p1[1]);
-    const cp1x=p1[0]+(p2[0]-p0[0])/6;
-    const cp1y=p1[1]+(p2[1]-p0[1])/6;
-    const cp2x=p2[0]-(p3[0]-p1[0])/6;
-    const cp2y=p2[1]-(p3[1]-p1[1])/6;
-    ctx.bezierCurveTo(cp1x,cp1y,cp2x,cp2y,p2[0],p2[1]);
-  }
-  ctx.closePath();
-}
+let _globeSelectedIdx=-1;
+let _globeTouchStartX=0;
+let _globeTouchStartY=0;
 
-// is point inside polygon (ray-casting)
-function _ptInPoly(px,py,poly){
-  let inside=false;
-  const n=poly.length;
-  for(let i=0,j=n-1;i<n;j=i++){
-    const xi=poly[i][0],yi=poly[i][1];
-    const xj=poly[j][0],yj=poly[j][1];
-    const intersect=((yi>py)!==(yj>py))&&(px<(xj-xi)*(py-yi)/(yj-yi)+xi);
-    if(intersect) inside=!inside;
-  }
-  return inside;
-}
-
-// polygon centroid
-function _centroid(poly){
-  let sx=0,sy=0;
-  for(const p of poly){sx+=p[0];sy+=p[1];}
-  return [sx/poly.length, sy/poly.length];
-}
-
-// ── layout: 5 continent positions on planet disk ──
-// Returns array of {cx,cy,rx,ry,pts} relative to planet center
-function _getContLayouts(pcx,pcy,pradius){
-  const r=pradius;
-  return [
-    {cx:pcx-r*0.38, cy:pcy-r*0.30, rx:r*0.28, ry:r*0.23, pts:11, seed:'cont0'},
-    {cx:pcx+r*0.35, cy:pcy-r*0.28, rx:r*0.25, ry:r*0.22, pts:10, seed:'cont1'},
-    {cx:pcx-r*0.10, cy:pcy+r*0.05, rx:r*0.30, ry:r*0.24, pts:12, seed:'cont2'},
-    {cx:pcx-r*0.42, cy:pcy+r*0.38, rx:r*0.22, ry:r*0.20, pts:9,  seed:'cont3'},
-    {cx:pcx+r*0.38, cy:pcy+r*0.32, rx:r*0.26, ry:r*0.21, pts:10, seed:'cont4'},
-  ];
-}
-
-// ── SVG globe view state ──
-let _svgEl=null;
-let _svgSelectedIdx=-1;
-let _svgTouchStartX=0;
-let _svgTouchStartY=0;
-// cached polys for hit-testing (set during each renderGlobeView call)
-let _svgPolys=[];
-
-// convert polygon points to smooth SVG cubic-bezier path (same Catmull-Rom as canvas version)
-function _polyToSVGPath(pts){
-  if(pts.length<3) return '';
-  const n=pts.length;
-  let d='';
-  for(let i=0;i<n;i++){
-    const p0=pts[(i-1+n)%n];
-    const p1=pts[i];
-    const p2=pts[(i+1)%n];
-    const p3=pts[(i+2)%n];
-    if(i===0) d+=`M${p1[0].toFixed(1)},${p1[1].toFixed(1)}`;
-    const cp1x=p1[0]+(p2[0]-p0[0])/6;
-    const cp1y=p1[1]+(p2[1]-p0[1])/6;
-    const cp2x=p2[0]-(p3[0]-p1[0])/6;
-    const cp2y=p2[1]-(p3[1]-p1[1])/6;
-    d+=` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
-  }
-  return d+' Z';
-}
-
-// map a client-space point into SVG viewBox coordinates
-function _svgClientToLocal(svg,cx,cy){
-  const rect=svg.getBoundingClientRect();
-  const vb=svg.viewBox.baseVal;
-  const scaleX=vb.width/rect.width;
-  const scaleY=vb.height/rect.height;
-  return [(cx-rect.left)*scaleX,(cy-rect.top)*scaleY];
-}
-
-// ── init ──
 function initGlobeView(){
-  // defer so the screen is in layout and offsetWidth is valid
   requestAnimationFrame(renderGlobeView);
 }
 
@@ -2183,147 +2087,107 @@ function renderGlobeView(){
   const list=document.getElementById('continent-list');
   if(!list) return;
 
-  // measure container width before touching the DOM
   const W=Math.max(list.offsetWidth,280);
   const H=Math.round(W*1.35);
+  const pradius=W*0.42;
+  const pcx=W/2;
+  const pcy=H*0.40;
+  const pd=pradius*2;
 
   const conts=state.planet.continents;
-  const mapH=H*0.78;
-  const pradius=Math.min(W,mapH)*0.44;
-  const pcx=W/2;
-  const pcy=mapH*0.48;
 
-  const layouts=_getContLayouts(pcx,pcy,pradius);
-  const polys=layouts.map((l,i)=>_genContPoly(l.seed+conts[i].name,l.cx,l.cy,l.rx,l.ry,l.pts));
-  _svgPolys=polys;
-
-  // stars (static, seeded)
+  // stars
   const rng=mkRng(42);
-  let stars='';
-  for(let i=0;i<80;i++){
-    const sx=(rng()*W).toFixed(1);
-    const sy=(rng()*H).toFixed(1);
-    const r=(0.4+rng()*1.3).toFixed(1);
-    const op=(0.35+rng()*0.55).toFixed(2);
-    stars+=`<circle cx="${sx}" cy="${sy}" r="${r}" fill="rgba(255,255,230,${op})"/>`;
+  let starHTML='';
+  for(let i=0;i<55;i++){
+    const sx=(rng()*W).toFixed(0);
+    const sy=(rng()*H).toFixed(0);
+    const sr=(0.8+rng()*2.0).toFixed(1);
+    const so=(0.3+rng()*0.65).toFixed(2);
+    starHTML+=`<div style="position:absolute;left:${sx}px;top:${sy}px;width:${sr}px;height:${sr}px;border-radius:50%;background:rgba(255,255,230,${so});pointer-events:none"></div>`;
   }
 
-  // continents
-  let contSVG='';
+  // continent blobs
+  let contHTML='';
   for(let i=0;i<5;i++){
     const cont=conts[i];
-    const biome=BIOME_COLORS[i%BIOME_COLORS.length];
-    const d=_polyToSVGPath(polys[i]);
-    const isSel=(i===_svgSelectedIdx);
+    const o=CONT_OFFSETS[i];
+    const biome=BIOME_COLORS[i];
+    const isSel=(i===_globeSelectedIdx);
     const isConq=cont.conquered;
+    // size in px relative to planet disk
+    const bw=(o.rw*2*pradius).toFixed(0);
+    const bh=(o.rh*2*pradius).toFixed(0);
+    // position: offset from planet center, adjust for blob center
+    const bleft=(pradius+o.dx*pradius-o.rw*pradius).toFixed(0);
+    const btop=(pradius+o.dy*pradius-o.rh*pradius).toFixed(0);
     const fill=isConq?biome.hi:biome.base;
     const stroke=isConq?'#d4a832':'#c83010';
     const sw=isSel?3:1.5;
-    const filt=isSel?'filter="url(#sel-glow)"':'';
-    const [gcx,gcy]=_centroid(polys[i]);
-    const shortName=cont.name.length>9?cont.name.slice(0,8)+'…':cont.name;
-    const lc=isConq?'#f0d060':'#ffffff';
-    contSVG+=`<path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" ${filt} data-cont-idx="${i}" style="cursor:pointer"/>`;
-    contSVG+=`<text x="${gcx.toFixed(1)}" y="${gcy.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${lc}" font-size="8" font-weight="900" font-family="monospace" letter-spacing="1" style="pointer-events:none">${shortName.toUpperCase()}</text>`;
-    if(isConq) contSVG+=`<text x="${gcx.toFixed(1)}" y="${(gcy+10).toFixed(1)}" text-anchor="middle" fill="#c8a020" font-size="7" font-family="monospace" style="pointer-events:none">SECURED</text>`;
+    const glow=isSel?`box-shadow:0 0 14px ${stroke},0 0 28px ${stroke}55;`:'';
+    const opacity=isConq?'1':'0.82';
+    const labelSize=Math.max(7,Math.min(parseFloat(bw),parseFloat(bh))*0.14).toFixed(0);
+    const shortName=cont.name.length>8?cont.name.slice(0,7)+'…':cont.name;
+    contHTML+=`<div data-cont-idx="${i}" style="position:absolute;left:${bleft}px;top:${btop}px;width:${bw}px;height:${bh}px;border-radius:${BLOB_SHAPES[i]};background:${fill};border:${sw}px solid ${stroke};opacity:${opacity};cursor:pointer;display:flex;align-items:center;justify-content:center;flex-direction:column;${glow}touch-action:manipulation">
+  <span style="font-size:${labelSize}px;font-weight:900;font-family:monospace;letter-spacing:1px;color:${isConq?'#f0e060':'#fff'};text-shadow:1px 1px 3px rgba(0,0,0,0.9);pointer-events:none;text-align:center;line-height:1.2">${shortName.toUpperCase()}</span>${isConq?`<span style="font-size:7px;color:#c8a020;font-family:monospace;pointer-events:none">✓</span>`:''}
+</div>`;
   }
 
   const conqN=conts.filter(c=>c.conquered).length;
   const pips=Array.from({length:5},(_,i)=>i<conqN?'◆':'◇').join(' ');
   const planetName=(state.planet.name||'PLANET').toUpperCase();
-  const footY=H*0.88;
 
-  // Write the FULL <svg> tag into the container's innerHTML so the HTML
-  // parser handles SVG namespace correctly — setting innerHTML on an
-  // SVGElement itself is unreliable on iOS Safari.
-  list.innerHTML=`<svg id="globe-view"
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 ${W} ${H}"
-    width="${W}" height="${H}"
-    style="width:100%;display:block;touch-action:manipulation">
-<defs>
-  <radialGradient id="space-bg" cx="50%" cy="42%" r="80%">
-    <stop offset="0%" stop-color="#0e1420"/>
-    <stop offset="70%" stop-color="#070b14"/>
-    <stop offset="100%" stop-color="#020408"/>
-  </radialGradient>
-  <radialGradient id="ocean-rg" cx="40%" cy="38%" r="68%">
-    <stop offset="0%" stop-color="#2080b8"/>
-    <stop offset="55%" stop-color="#0e4870"/>
-    <stop offset="100%" stop-color="#061828"/>
-  </radialGradient>
-  <filter id="sel-glow" x="-30%" y="-30%" width="160%" height="160%">
-    <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
-    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-  </filter>
-  <clipPath id="planet-clip"><circle cx="${pcx.toFixed(1)}" cy="${pcy.toFixed(1)}" r="${pradius.toFixed(1)}"/></clipPath>
-</defs>
-<rect width="${W}" height="${H}" fill="url(#space-bg)"/>
-${stars}
-<circle cx="${pcx.toFixed(1)}" cy="${pcy.toFixed(1)}" r="${(pradius*1.1).toFixed(1)}" fill="none" stroke="rgba(60,130,255,0.15)" stroke-width="${(pradius*0.06).toFixed(1)}"/>
-<circle cx="${pcx.toFixed(1)}" cy="${pcy.toFixed(1)}" r="${pradius.toFixed(1)}" fill="url(#ocean-rg)" stroke="rgba(80,160,255,0.6)" stroke-width="2"/>
-<g clip-path="url(#planet-clip)">${contSVG}</g>
-<circle cx="${pcx.toFixed(1)}" cy="${pcy.toFixed(1)}" r="${pradius.toFixed(1)}" fill="none" stroke="rgba(0,0,0,0.4)" stroke-width="${(pradius*0.09).toFixed(1)}"/>
-<text x="${(W/2).toFixed(1)}" y="${footY.toFixed(1)}" text-anchor="middle" fill="#c85028" font-size="12" font-weight="900" font-family="monospace" letter-spacing="2">${planetName}</text>
-<text x="${(W/2).toFixed(1)}" y="${(footY+16).toFixed(1)}" text-anchor="middle" fill="#c8a020" font-size="10" font-family="monospace">${pips}</text>
-<text x="${(W/2).toFixed(1)}" y="${(H-6).toFixed(1)}" text-anchor="middle" fill="rgba(160,150,120,0.4)" font-size="9" font-family="monospace">TAP A CONTINENT TO SELECT</text>
-</svg>`;
+  list.innerHTML=`<div id="globe-view" style="position:relative;width:${W}px;height:${H}px;background:radial-gradient(ellipse at 50% 42%,#0e1420 0%,#07090f 60%,#020408 100%);overflow:hidden;touch-action:manipulation">
+${starHTML}
+<div style="position:absolute;left:${(pcx-pradius*1.08).toFixed(0)}px;top:${(pcy-pradius*1.08).toFixed(0)}px;width:${(pd*1.08).toFixed(0)}px;height:${(pd*1.08).toFixed(0)}px;border-radius:50%;background:radial-gradient(circle,rgba(30,80,200,0.10) 70%,transparent 100%);pointer-events:none"></div>
+<div style="position:absolute;left:${(pcx-pradius).toFixed(0)}px;top:${(pcy-pradius).toFixed(0)}px;width:${pd.toFixed(0)}px;height:${pd.toFixed(0)}px;border-radius:50%;background:radial-gradient(circle at 40% 38%,#2080b8,#0e4870 55%,#061828);border:2px solid rgba(80,160,255,0.55);overflow:hidden">
+${contHTML}
+</div>
+<div style="position:absolute;left:0;top:${(pcy+pradius+10).toFixed(0)}px;width:100%;text-align:center;font-size:12px;font-weight:900;font-family:monospace;letter-spacing:2px;color:#c85028;pointer-events:none">${planetName}</div>
+<div style="position:absolute;left:0;top:${(pcy+pradius+26).toFixed(0)}px;width:100%;text-align:center;font-size:10px;font-family:monospace;color:#c8a020;pointer-events:none">${pips}</div>
+<div style="position:absolute;left:0;bottom:8px;width:100%;text-align:center;font-size:9px;font-family:monospace;color:rgba(160,150,120,0.4);letter-spacing:1px;pointer-events:none">TAP CONTINENT · SWIPE TO CYCLE</div>
+</div>`;
 
-  // Re-acquire SVG element and attach event listeners after each render
-  _svgEl=document.getElementById('globe-view');
-  if(!_svgEl) return;
-  _svgEl.addEventListener('click',_svgOnClick);
-  _svgEl.addEventListener('touchstart',e=>{
-    if(e.touches.length>0){_svgTouchStartX=e.touches[0].clientX;_svgTouchStartY=e.touches[0].clientY;}
+  const globe=document.getElementById('globe-view');
+  if(!globe) return;
+
+  // click handler (desktop + iOS tap via touch-action:manipulation)
+  globe.addEventListener('click',e=>{
+    const el=e.target.closest('[data-cont-idx]');
+    if(el){
+      const idx=parseInt(el.getAttribute('data-cont-idx'));
+      if(idx===_globeSelectedIdx){ openContinent(idx); }
+      else{ _globeSelectedIdx=idx; state.selCont=idx; renderGlobeView(); }
+      return;
+    }
+    if(_globeSelectedIdx>=0){ _globeSelectedIdx=-1; renderGlobeView(); }
+  });
+
+  // swipe to cycle continents
+  globe.addEventListener('touchstart',e=>{
+    if(e.touches.length>0){
+      _globeTouchStartX=e.touches[0].clientX;
+      _globeTouchStartY=e.touches[0].clientY;
+    }
   },{passive:true});
-  _svgEl.addEventListener('touchend',e=>{
+  globe.addEventListener('touchend',e=>{
     if(!e.changedTouches.length) return;
     const t=e.changedTouches[0];
-    const dx=t.clientX-_svgTouchStartX;
-    const dy=t.clientY-_svgTouchStartY;
+    const dx=t.clientX-_globeTouchStartX;
+    const dy=t.clientY-_globeTouchStartY;
     if(Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)*1.5){
       if(dx<0) state.selCont=(state.selCont+1)%5;
       else state.selCont=(state.selCont+4)%5;
-      _svgSelectedIdx=state.selCont;
+      _globeSelectedIdx=state.selCont;
       renderGlobeView();
-      return;
-    }
-    if(!_svgEl) return;
-    const [lx,ly]=_svgClientToLocal(_svgEl,t.clientX,t.clientY);
-    let hit=-1;
-    for(let i=0;i<_svgPolys.length;i++){if(_ptInPoly(lx,ly,_svgPolys[i])){hit=i;break;}}
-    if(hit>=0){
-      if(hit===_svgSelectedIdx){openContinent(hit);}
-      else{_svgSelectedIdx=hit;state.selCont=hit;renderGlobeView();}
-    } else {
-      if(_svgSelectedIdx>=0){_svgSelectedIdx=-1;renderGlobeView();}
     }
   },{passive:true});
-}
-
-function _svgOnClick(e){
-  const t=e.target;
-  if(t && t.hasAttribute && t.hasAttribute('data-cont-idx')){
-    const idx=parseInt(t.getAttribute('data-cont-idx'));
-    if(idx===_svgSelectedIdx){
-      // second click on already-selected continent → navigate
-      openContinent(idx);
-    } else {
-      // first click → select and highlight
-      state.selCont=idx;
-      _svgSelectedIdx=idx;
-      renderGlobeView();
-    }
-    return;
-  }
-  if(_svgSelectedIdx>=0){ _svgSelectedIdx=-1; renderGlobeView(); }
 }
 
 function refreshGlobeView(){
   if(document.getElementById('continent-list')) renderGlobeView();
 }
 
-// ── legacy canvas stubs kept for external callers ──
 function drawContinentPanel(ctx,cont,cx,cy,panelW,panelH,isSelected,contIdx){
   const biome=BIOME_COLORS[(contIdx||0)%BIOME_COLORS.length];
   ctx.save();

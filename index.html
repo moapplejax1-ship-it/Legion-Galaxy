@@ -1079,7 +1079,7 @@ function renderHome(){
   document.getElementById('conquest-lbl').textContent=`${n}/5 CONTINENTS SECURED`;
   document.getElementById('conquest-pips').innerHTML=state.planet.continents.map(c=>`<div class="pip ${c.conquered?'done':'empty'}"></div>`).join('');
   drawPlanet(document.getElementById('home-planet'),[200,116,40],140,true);
-  initGlobeView();
+  requestAnimationFrame(()=>initGlobeView());
   const locked=document.getElementById('sp-locked');
   if(spUnlocked()){locked.style.display='none';}
   else{locked.style.display='block';locked.innerHTML=`<span style="color:var(--blood);font-weight:900">// SPACEPORT LOCKED //</span><br>Secure ${3-n} more continent${3-n!==1?'s':''} to construct a Spaceport.`;}
@@ -1552,26 +1552,6 @@ function getTroopBonuses(){
   return b;
 }
 
-function resolveLaneCombat(lane,alienLane){
-  const b=getTroopBonuses();
-  const infAtk=lane.inf*1.0*b.infAtk*(alienLane.cavalry>alienLane.tanks?1.4:1.0);
-  const tnkAtk=lane.tnk*1.8*b.tnkAtk*(alienLane.infantry>alienLane.cavalry?1.4:1.0);
-  const cavAtk=lane.cav*1.5*b.cavAtk*(alienLane.tanks>alienLane.infantry?1.5:1.0);
-  const totalAtk=infAtk+tnkAtk+cavAtk;
-  const alienInfDef=alienLane.infantry*1.0*(lane.cav>lane.tnk?1.3:1.0);
-  const alienTnkDef=alienLane.tanks*2.2*(lane.inf>lane.cav?1.3:1.0);
-  const alienCavDef=alienLane.cavalry*1.3*(lane.tnk>lane.inf?1.2:1.0);
-  const totalDef=alienInfDef+alienTnkDef+alienCavDef;
-  const deployed=lane.inf+lane.tnk+lane.cav;
-  const win=deployed>0&&totalAtk>=totalDef*0.78;
-  const baseRate=win?0.20+Math.random()*0.20:0.55+Math.random()*0.25;
-  const cavRate=baseRate*(1-b.cavEvade);
-  return{win,totalAtk:totalAtk.toFixed(0),totalDef:totalDef.toFixed(0),
-    infLost:Math.floor(lane.inf*baseRate/b.infDef),
-    tnkLost:Math.floor(lane.tnk*baseRate/b.tnkDef),
-    cavLost:Math.floor(lane.cav*cavRate)};
-}
-
 function engageInvasion(){
   const dep=deployedTroops();
   if(dep.infantry+dep.tanks+dep.cavalry===0){toast('// DEPLOY TROOPS FIRST //');return;}
@@ -1930,6 +1910,7 @@ function initGlobeView(){
   c.addEventListener('touchstart',_onTouchStart,{passive:true});
   c.addEventListener('touchend',_onTouchEnd,{passive:true});
 
+  _resizeCanvas();
   renderGlobeView();
   _startLoop();
 }
@@ -1937,9 +1918,9 @@ function initGlobeView(){
 function _resizeCanvas(){
   if(!_canvas) return;
   const parent=_canvas.parentElement;
-  const w=parent?parent.clientWidth||360:360;
+  const w=Math.max(parent?parent.clientWidth:0,280);
   _canvas.width=w;
-  _canvas.height=420;
+  _canvas.height=Math.round(w*0.9);
 }
 
 // ── animation loop ──
@@ -1950,7 +1931,7 @@ function _startLoop(){
     if(!el){_rafId=null;return;}
     // only redraw if home screen is visible
     const homeScreen=document.getElementById('screen-home');
-    if(homeScreen && homeScreen.style.display!=='none'){
+    if(homeScreen && homeScreen.classList.contains('active')){
       renderGlobeView();
     }
     _rafId=requestAnimationFrame(loop);
@@ -1961,6 +1942,7 @@ function _startLoop(){
 // ── main render ──
 function renderGlobeView(){
   if(!_canvas||!_ctx) return;
+  _resizeCanvas();
   const c=_canvas, ctx=_ctx;
   const W=c.width, H=c.height;
   const now=Date.now();

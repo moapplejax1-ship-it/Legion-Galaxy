@@ -2140,6 +2140,9 @@ function _getContLayouts(pcx,pcy,pradius){
 let _svgEl=null;
 let _svgSelectedIdx=-1;
 let _svgTouchStartX=0;
+let _svgTouchStartY=0;
+// cached polys for hit-testing (set during each renderGlobeView call)
+let _svgPolys=[];
 
 // convert polygon points to smooth SVG cubic-bezier path (same Catmull-Rom as canvas version)
 function _polyToSVGPath(pts){
@@ -2161,6 +2164,15 @@ function _polyToSVGPath(pts){
   return d+' Z';
 }
 
+// map a client-space point into SVG viewBox coordinates
+function _svgClientToLocal(svg,cx,cy){
+  const rect=svg.getBoundingClientRect();
+  const vb=svg.viewBox.baseVal;
+  const scaleX=vb.width/rect.width;
+  const scaleY=vb.height/rect.height;
+  return [(cx-rect.left)*scaleX,(cy-rect.top)*scaleY];
+}
+
 // ── init ──
 function initGlobeView(){
   const list=document.getElementById('continent-list');
@@ -2171,26 +2183,47 @@ function initGlobeView(){
   svg.style.cssText='width:100%;display:block;touch-action:manipulation';
   list.appendChild(svg);
   _svgEl=svg;
-  renderGlobeView();
+  // defer first render so the element has layout dimensions
+  requestAnimationFrame(()=>renderGlobeView());
   svg.addEventListener('click',_svgOnClick);
-  svg.addEventListener('touchstart',e=>{if(e.touches.length>0)_svgTouchStartX=e.touches[0].clientX;},{passive:true});
+  svg.addEventListener('touchstart',e=>{
+    if(e.touches.length>0){
+      _svgTouchStartX=e.touches[0].clientX;
+      _svgTouchStartY=e.touches[0].clientY;
+    }
+  },{passive:true});
   svg.addEventListener('touchend',e=>{
     if(!e.changedTouches.length) return;
-    const dx=e.changedTouches[0].clientX-_svgTouchStartX;
-    if(Math.abs(dx)>50){
+    const t=e.changedTouches[0];
+    const dx=t.clientX-_svgTouchStartX;
+    const dy=t.clientY-_svgTouchStartY;
+    // horizontal swipe → cycle selection
+    if(Math.abs(dx)>50 && Math.abs(dx)>Math.abs(dy)*1.5){
       if(dx<0) state.selCont=(state.selCont+1)%5;
       else state.selCont=(state.selCont+4)%5;
       _svgSelectedIdx=state.selCont;
       renderGlobeView();
       return;
     }
-    // treat as tap — SVG click fires on desktop but not always on iOS, so mirror it
-    const t=e.changedTouches[0];
-    const el=document.elementFromPoint(t.clientX,t.clientY);
-    if(el && el.hasAttribute('data-cont-idx')){
-      const idx=parseInt(el.getAttribute('data-cont-idx'));
-      _svgSelectedIdx=idx; state.selCont=idx;
-      renderGlobeView();
+    // tap — hit-test against stored polys using SVG coordinate space
+    if(!_svgEl) return;
+    const [lx,ly]=_svgClientToLocal(_svgEl,t.clientX,t.clientY);
+    let hit=-1;
+    for(let i=0;i<_svgPolys.length;i++){
+      if(_ptInPoly(lx,ly,_svgPolys[i])){ hit=i; break; }
+    }
+    if(hit>=0){
+      if(hit===_svgSelectedIdx){
+        // second tap on selected → navigate
+        openContinent(hit);
+      } else {
+        // first tap → select and highlight
+        _svgSelectedIdx=hit; state.selCont=hit;
+        renderGlobeView();
+      }
+    } else {
+      // tap on empty space → deselect
+      if(_svgSelectedIdx>=0){ _svgSelectedIdx=-1; renderGlobeView(); }
     }
   },{passive:true});
 }
@@ -2199,7 +2232,8 @@ function renderGlobeView(){
   const svg=_svgEl;
   if(!svg) return;
   const parent=svg.parentElement;
-  const W=Math.max(parent?parent.clientWidth:0,280);
+  // Use offsetWidth on the parent for reliable post-layout width
+  const W=Math.max(parent?parent.offsetWidth:0,280);
   const H=Math.round(W*1.35);
   svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
   svg.setAttribute('width',W);
@@ -2213,6 +2247,8 @@ function renderGlobeView(){
 
   const layouts=_getContLayouts(pcx,pcy,pradius);
   const polys=layouts.map((l,i)=>_genContPoly(l.seed+conts[i].name,l.cx,l.cy,l.rx,l.ry,l.pts));
+  // cache for touch hit-testing
+  _svgPolys=polys;
 
   // stars (static, seeded)
   const rng=mkRng(42);
@@ -2284,20 +2320,26 @@ function _svgOnClick(e){
   const t=e.target;
   if(t && t.hasAttribute && t.hasAttribute('data-cont-idx')){
     const idx=parseInt(t.getAttribute('data-cont-idx'));
-    state.selCont=idx;
-    _svgSelectedIdx=idx;
-    openContinent(idx);
+    if(idx===_svgSelectedIdx){
+      // second click on already-selected continent → navigate
+      openContinent(idx);
+    } else {
+      // first click → select and highlight
+      state.selCont=idx;
+      _svgSelectedIdx=idx;
+      renderGlobeView();
+    }
     return;
   }
-  _svgSelectedIdx=-1;
-  renderGlobeView();
+  if(_svgSelectedIdx>=0){ _svgSelectedIdx=-1; renderGlobeView(); }
 }
 
 function refreshGlobeView(){
-  if(!_svgEl){
+  // if _svgEl is stale (detached from DOM), re-acquire or bail
+  if(!_svgEl || !_svgEl.isConnected){
     const el=document.getElementById('globe-view');
-    if(el) _svgEl=el;
-    else return;
+    if(el && el.isConnected) _svgEl=el;
+    else { _svgEl=null; return; }
   }
   renderGlobeView();
 }

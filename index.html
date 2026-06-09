@@ -1155,29 +1155,128 @@ function renderBuildingDetail(bldg, contIdx) {
   const lvl2Locked = bldg.level >= 2 && !state.researchV2.has('advancedConstruction');
   const lvl3Locked = bldg.level >= 3 && !state.researchV2.has('megaStructures');
   const upgBlocked = lvl2Locked || lvl3Locked;
-  let html = `<div class="bld-detail">
-    <p>${def.desc}</p>
-    <p>Level: ${bldg.level} / ${maxLv}</p>
-    <p>Status: ${bldg.built ? 'Active' : 'Under Construction (' + Math.max(0, Math.ceil((bldg.buildEnd - Date.now()) / 1000)) + 's)'}</p>`;
+  const isMaxLevel = bldg.level >= maxLv;
+  const odActive = state.overdrive[bldg._uid] && Date.now() < state.overdrive[bldg._uid];
+
+  // find category for this building type
+  let catName = '';
+  Object.entries(BUILD_CATEGORIES).forEach(([k,cat])=>{ if(cat.types.includes(bldg.type)) catName = cat.label; });
+
+  let html = `<div style="padding:12px">`;
+
+  // Header section
+  html += `<div class="panel" style="margin-bottom:10px">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">
+      <div>
+        <div style="font-size:14px;font-weight:900;letter-spacing:1px;color:var(--text)">${def.name}</div>
+        ${catName?`<div style="font-size:9px;color:var(--muted);margin-top:2px">${catName}</div>`:''}
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:11px;font-weight:900;padding:3px 8px;background:${bldg.built?'var(--mil)':'var(--gold)'};color:${bldg.built?'#fff':'#000'}">
+          ${bldg.built ? `LV ${bldg.level}` : 'BUILDING'}
+        </div>
+        ${isMaxLevel?`<div style="font-size:8px;color:var(--gold);margin-top:3px;letter-spacing:1px">MAX LEVEL</div>`:''}
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--muted);line-height:1.6;margin-bottom:8px">${def.desc}</div>
+    <div style="font-size:10px;color:var(--muted)">
+      ${bldg.built
+        ? `<span style="color:var(--mil)">● ACTIVE</span>`
+        : `<span style="color:var(--gold)">⟳ BUILDING — ${Math.max(0,Math.ceil((bldg.buildEnd-Date.now())/1000))}s remaining</span>`
+      }
+      ${odActive?'<span style="color:var(--gold);margin-left:8px">⚡ OVERDRIVE</span>':''}
+    </div>
+  </div>`;
+
+  // Production stats
   if (def.prod && def.prod.res) {
-    html += `<p>Production: ${def.prod.base * bldg.level} ${def.prod.res}/tick</p>`;
+    const currentOutput = def.prod.base * bldg.level;
+    const maxOutput = def.prod.base * maxLv;
+    const pct = Math.floor((currentOutput / maxOutput) * 100);
+    html += `<div class="panel" style="margin-bottom:10px">
+      <div class="sec-hdr">PRODUCTION</div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:6px">
+        <span style="color:var(--muted)">${def.prod.res.toUpperCase()} output</span>
+        <span style="color:var(--mil);font-weight:900">+${currentOutput} / tick</span>
+      </div>
+      <div class="prog-bar" style="margin-bottom:4px">
+        <div class="prog-fill" style="width:${pct}%;background:var(--mil)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted)">
+        <span>Current: ${currentOutput}</span>
+        <span>Max (Lv${maxLv}): ${maxOutput}</span>
+      </div>
+    </div>`;
   }
-  if (bldg.built && bldg.level < maxLv) {
-    const reason = lvl2Locked ? ' (need Advanced Construction)' : lvl3Locked ? ' (need Mega Structures)' : '';
-    html += `<button ${(canUpg && !upgBlocked) ? '' : 'disabled'} onclick="upgradeBuilding(${bldg._uid},${contIdx})">UPGRADE (${upgCost} metal)${reason}</button>`;
+
+  // Upgrade section
+  if (bldg.built) {
+    html += `<div class="panel" style="margin-bottom:10px">
+      <div class="sec-hdr">UPGRADE</div>`;
+    if (isMaxLevel) {
+      html += `<div style="font-size:10px;color:var(--gold);text-align:center;padding:8px;letter-spacing:2px">◆ MAX LEVEL REACHED ◆</div>`;
+    } else {
+      const reason = lvl2Locked ? '— needs Advanced Construction' : lvl3Locked ? '— needs Mega Structures' : '';
+      const blocked = upgBlocked && reason;
+      html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div>
+          <div style="font-size:10px;color:var(--text)">Level ${bldg.level} → ${bldg.level+1}</div>
+          ${blocked?`<div style="font-size:9px;color:var(--blood)">${reason}</div>`:''}
+        </div>
+        <span style="font-size:10px;color:var(--gold)">⛏ ${upgCost} metal</span>
+      </div>
+      <button ${(canUpg&&!upgBlocked)?'':'disabled'} onclick="upgradeBuilding(${bldg._uid},${contIdx})"
+        style="width:100%;padding:8px;font-size:10px;font-weight:900;font-family:monospace;letter-spacing:1px;
+          background:${(canUpg&&!upgBlocked)?'var(--rust)':'var(--plate)'};
+          color:${(canUpg&&!upgBlocked)?'#fff':'var(--muted)'};
+          border:1px solid ${(canUpg&&!upgBlocked)?'var(--rust)':'var(--edge)'};cursor:pointer">
+        ↑ UPGRADE TO LEVEL ${bldg.level+1}
+      </button>`;
+    }
+    html += `</div>`;
   }
-  html += getOverdriveCountdownHTML(bldg);
+
+  // Overdrive section
+  if (bldg.built && def.prod && def.prod.res) {
+    html += `<div class="panel" style="margin-bottom:10px">
+      <div class="sec-hdr">OVERDRIVE</div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:8px">Triples output for 2 hours. Costs 20 💠 excellorant.</div>
+      ${getOverdriveCountdownHTML(bldg)}
+    </div>`;
+  }
+
+  // Special sections
   if (bldg.type === 'storehouse') html += getStorehouseDetailHTML(bldg);
-  if (bldg.type === 'commodityExchange') html += getCommodityExchangeHTML(bldg);
+  if (bldg.type === 'commodityExchange') {
+    html += `<div class="panel" style="margin-bottom:10px"><div class="sec-hdr">TRADE</div>${getCommodityExchangeHTML(bldg)}</div>`;
+  }
   if (bldg.type === 'defenseGrid') html += getDefenseGridDetailHTML(bldg);
   if (bldg.type === 'terraformer') html += getTerraformerDetailHTML(bldg, contIdx);
-  if (bldg.type === 'spaceport' && spUnlocked()) html += getFleetScreenHTML();
+  if (bldg.type === 'spaceport') {
+    if (spUnlocked()) {
+      html += `<div class="panel" style="margin-bottom:10px"><div class="sec-hdr">FLEET</div>${getFleetScreenHTML()}</div>`;
+    } else {
+      html += `<div class="panel blood" style="margin-bottom:10px">
+        <div class="sec-hdr">FLEET</div>
+        <div style="font-size:10px;color:var(--muted);text-align:center;padding:8px">Conquer 3 continents to unlock fleet operations.</div>
+      </div>`;
+    }
+  }
   if (bldg.type === 'researchCenter') {
-    html += `<button onclick="openResearchScreen('military')">⚛ OPEN RESEARCH</button>`;
+    html += `<div class="panel" style="margin-bottom:10px">
+      <div class="sec-hdr">RESEARCH</div>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:8px">Access the technology tree to unlock upgrades and new capabilities.</div>
+      <button class="action-btn" onclick="openResearchScreen('military')">⚛ OPEN RESEARCH TREE</button>
+    </div>`;
   }
   if (bldg.type === 'barracks') {
-    html += `<button onclick="openTroops(${contIdx})">🪖 MANAGE TROOPS</button>`;
+    html += `<div class="panel" style="margin-bottom:10px">
+      <div class="sec-hdr">TROOPS</div>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:8px">Train and upgrade your military forces.</div>
+      <button class="action-btn mil" onclick="openTroops(${contIdx})">🪖 MANAGE TROOPS</button>
+    </div>`;
   }
+
   html += '</div>';
   el.innerHTML = html;
 }

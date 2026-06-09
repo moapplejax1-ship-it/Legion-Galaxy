@@ -167,7 +167,16 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
     </div>
     <div class="resource-bar" id="res-home"></div>
     <div class="screen-body" style="padding:0 0 28px">
-      <div id="continent-list"></div>
+      <div id="continent-list">
+        <!-- static placeholder shown until JS renders the planet -->
+        <div id="planet-placeholder" style="width:100%;padding-top:135%;position:relative;background:radial-gradient(ellipse at 50% 42%,#0e1420 0%,#07090f 60%,#020408 100%)">
+          <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">
+            <div style="width:60%;aspect-ratio:1;border-radius:50%;background:radial-gradient(circle at 40% 38%,#2080b8,#0e4870 55%,#061828);border:2px solid rgba(80,160,255,0.55);box-shadow:0 0 40px rgba(30,80,200,0.2)"></div>
+            <div style="font-size:10px;letter-spacing:2px;color:var(--rust);font-weight:900;font-family:monospace">NEW TERRA</div>
+            <div style="font-size:9px;color:var(--muted);font-family:monospace">LOADING PLANET…</div>
+          </div>
+        </div>
+      </div>
       <div style="padding:0 12px">
         <div id="sp-locked" class="panel blood" style="display:none;font-size:12px;color:var(--muted);line-height:1.6"></div>
       </div>
@@ -1014,7 +1023,12 @@ function renderAllResBars(){
 function renderHome(){
   renderAllResBars();
   const n=cc();
-  requestAnimationFrame(()=>initGlobeView());
+  // Render globe immediately; if layout not ready yet, rAF once to get dimensions
+  if(document.getElementById('continent-list') && document.getElementById('continent-list').offsetWidth>0){
+    renderGlobeView();
+  } else {
+    requestAnimationFrame(renderGlobeView);
+  }
   const locked=document.getElementById('sp-locked');
   if(locked){
     const n=cc();
@@ -2087,7 +2101,8 @@ function renderGlobeView(){
   const list=document.getElementById('continent-list');
   if(!list) return;
 
-  const W=Math.max(list.offsetWidth,280);
+  // offsetWidth is 0 when parent is display:none; fall back to window width
+  const W=Math.max(list.offsetWidth||list.parentElement&&list.parentElement.offsetWidth||window.innerWidth||375,280);
   const H=Math.round(W*1.35);
   const pradius=W*0.42;
   const pcx=W/2;

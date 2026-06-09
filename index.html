@@ -1022,13 +1022,10 @@ function renderAllResBars(){
 // ─────────────────────────────────────────────
 function renderHome(){
   renderAllResBars();
-  const n=cc();
-  // Render globe immediately; if layout not ready yet, rAF once to get dimensions
-  if(document.getElementById('continent-list') && document.getElementById('continent-list').offsetWidth>0){
-    renderGlobeView();
-  } else {
-    requestAnimationFrame(renderGlobeView);
-  }
+  // Always defer via rAF — the globe IIFE is defined later in the script,
+  // so renderGlobeView doesn't exist yet at the time this function is called
+  // during init. rAF fires after the full script has executed.
+  requestAnimationFrame(renderGlobeView);
   const locked=document.getElementById('sp-locked');
   if(locked){
     const n=cc();
@@ -2100,7 +2097,13 @@ function initGlobeView(){
 function renderGlobeView(){
   const list=document.getElementById('continent-list');
   if(!list) return;
-
+  try {
+    _renderGlobeViewInner(list);
+  } catch(e) {
+    list.innerHTML=`<div style="padding:16px;font-family:monospace;font-size:11px;color:#e04030"><b>// RENDER ERROR //</b><br>${e.message}<br><pre style="font-size:9px;white-space:pre-wrap;color:var(--muted)">${(e.stack||'').slice(0,400)}</pre></div>`;
+  }
+}
+function _renderGlobeViewInner(list){
   // offsetWidth is 0 when parent is display:none; fall back to window width
   const W=Math.max(list.offsetWidth||list.parentElement&&list.parentElement.offsetWidth||window.innerWidth||375,280);
   const H=Math.round(W*1.35);
@@ -2197,7 +2200,7 @@ ${contHTML}
       renderGlobeView();
     }
   },{passive:true});
-}
+} // end _renderGlobeViewInner
 
 function refreshGlobeView(){
   if(document.getElementById('continent-list')) renderGlobeView();

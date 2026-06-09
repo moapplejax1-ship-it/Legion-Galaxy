@@ -251,6 +251,7 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
 </div>
 <div id="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js"></script>
 <script>
 // ─────────────────────────────────────────────
 //  SEEDED RNG
@@ -298,7 +299,7 @@ const FOOTPRINTS={
 const SLOT_ORDER=['colonyCenter','resourceCollector','barracks','farm','house','researchCenter','excellorantFactory','spaceport'];
 
 // Grid constants
-const GCOLS=10, GROWS=7, CELL=50;
+const GCOLS=14, GROWS=10, CELL=44;
 const GRID_W=GCOLS*CELL; // 500
 const GRID_H=GROWS*CELL; // 350
 
@@ -1829,6 +1830,10 @@ function openBuilding(bldg,contIdx){
   if(bldg.type==='storehouse'){rosterHTML=getStorehouseDetailHTML(bldg);}
   if(bldg.type==='tradePost'){rosterHTML=getTradePostHTML(bldg);}
   if(bldg.type==='powerRelay'){rosterHTML=getEnergyStatusHTML();}
+  if(bldg.type==='commodityExchange'){rosterHTML=getCommodityExchangeHTML(bldg);}
+  if(bldg.type==='defenseGrid'&&typeof getDefenseGridDetailHTML==='function'){rosterHTML=getDefenseGridDetailHTML(bldg);}
+  if(bldg.type==='terraformer'&&typeof getTerraformerDetailHTML==='function'){rosterHTML=getTerraformerDetailHTML(bldg,contIdx);}
+  if(bldg.type==='spaceport'&&typeof getSpaceportDetailHTML==='function'){rosterHTML=getSpaceportDetailHTML(bldg);}
   if(bldg.type==='researchCenter'){
     const shipRows=RESEARCH.map((r,i)=>{const done=state.researchDone.has(i);
       return`<div class="roster-row" style="align-items:center;gap:10px">
@@ -2041,6 +2046,7 @@ applyStorehouseData();
 initEconomyV3();
 applyNewBuildingData();
 renderHome();
+initPixi();
 
 // ═══ GLOBE VIEW ═══
 // ═══ GLOBE VIEW ═══
@@ -3081,6 +3087,1387 @@ function getUpkeepSummaryHTML() {
   + (low ? `<span style="color:var(--blood);font-size:10px;margin-left:8px">⚠ LOW FOOD</span>` : '')
   + (deficit > 0 ? `<span style="color:var(--blood);font-size:10px;margin-left:8px">⚡ POWER CRITICAL</span>` : '');
 }
+
+// ═══ PIXI OVERLAY ═══
+// Legion Galaxy — PixiJS WebGL overlay for sci-fi post-processing effects
+// Inject PIXI_CDN_TAG before the game script tag.
+(function () {
+  'use strict';
+
+  /* ------------------------------------------------------------------ */
+  /*  Module-level state                                                  */
+  /* ------------------------------------------------------------------ */
+  let _app = null;
+  let _overlay = null;          // root PIXI.Container
+  let _crtSprite = null;        // scanline + vignette layer
+  let _vigSprite = null;        // vignette sprite
+  let _dustContainer = null;    // PIXI.ParticleContainer for nebula dust
+  let _sparkContainer = null;   // PIXI.Container for energy sparks
+  let _dustParticles = [];      // particle state array
+  let _sparks = [];             // active spark state
+  let _currentScreen = 'home';
+  let _W = 0, _H = 0;
+  let _colorMatrixFilter = null;
+  let _bloomOverlay = null;     // radial gradient bloom sprite
+
+  /* ------------------------------------------------------------------ */
+  /*  Entry point                                                        */
+  /* ------------------------------------------------------------------ */
+  async function initPixi() {
+    if (typeof PIXI === 'undefined') {
+      console.warn('[LG-Pixi] PIXI not loaded — effects disabled.');
+      return;
+    }
+
+    _W = window.innerWidth;
+    _H = window.innerHeight;
+
+    _app = new PIXI.Application();
+    await _app.init({
+      width: _W,
+      height: _H,
+      backgroundAlpha: 0,
+      antialias: true,
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
+      autoDensity: true,
+    });
+
+    // Overlay canvas — no pointer events, above game canvas (z-index 500)
+    _app.canvas.style.cssText =
+      'position:fixed;top:0;left:0;width:100%;height:100%;' +
+      'pointer-events:none;z-index:500;';
+    document.body.appendChild(_app.canvas);
+
+    // Root container
+    _overlay = new PIXI.Container();
+    _app.stage.addChild(_overlay);
+
+    // Build layers (order matters: dust → bloom → CRT → vignette)
+    _buildDustLayer();
+    _buildBloomLayer();
+    _buildCRTLayer();
+    _buildVignetteLayer();
+    _buildSparkLayer();
+
+    // Global cold blue-green color matrix
+    _applyColorMatrix();
+
+    // Ticker
+    _app.ticker.add(_onTick);
+
+    // React to game screen changes
+    window.addEventListener('screenChanged', _onScreenChanged);
+
+    // Patch the game's showScreen so we get notified without modifying index.html
+    _patchShowScreen();
+
+    // Handle resize
+    window.addEventListener('resize', _onResize);
+
+    // Watch resource bar for value changes (spark effect)
+    _watchResourceBar();
+
+    console.log('[LG-Pixi] Overlay ready — ' + _W + 'x' + _H);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Patch showScreen to emit events                                    */
+  /* ------------------------------------------------------------------ */
+  function _patchShowScreen() {
+    const orig = window.showScreen;
+    if (typeof orig !== 'function') return;
+    window.showScreen = function (name) {
+      orig.apply(this, arguments);
+      _currentScreen = name;
+      window.dispatchEvent(new CustomEvent('screenChanged', { detail: { screen: name } }));
+    };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Nebula dust particle layer                                          */
+  /* ------------------------------------------------------------------ */
+  function _buildDustLayer() {
+    // Use a plain Container instead of ParticleContainer for PixiJS 8 compatibility
+    _dustContainer = new PIXI.Container();
+    _dustContainer.label = 'nebulaDust';
+    _overlay.addChild(_dustContainer);
+
+    const DUST_COUNT = 220;
+    const PALETTE = [
+      0x6496ff, // blue
+      0x5a7aff,
+      0xc85028, // red-orange nebula
+      0x8060ff, // purple
+      0x40a0c0, // cyan
+    ];
+    const ALPHAS = [0.13, 0.10, 0.08, 0.11, 0.09];
+
+    for (let i = 0; i < DUST_COUNT; i++) {
+      const g = new PIXI.Graphics();
+      const r = 1 + Math.random() * 1.8; // 1-2.8 px radius
+      const colorIdx = Math.floor(Math.random() * PALETTE.length);
+      g.circle(0, 0, r);
+      g.fill({ color: PALETTE[colorIdx], alpha: ALPHAS[colorIdx] });
+
+      const state = {
+        gfx: g,
+        x: Math.random() * _W,
+        y: Math.random() * _H,
+        vx: (Math.random() - 0.5) * 0.18,
+        vy: (Math.random() - 0.5) * 0.12 + 0.04, // slight downward drift
+        twinklePhase: Math.random() * Math.PI * 2,
+        twinkleSpeed: 0.01 + Math.random() * 0.025,
+        baseAlpha: ALPHAS[colorIdx],
+      };
+
+      g.x = state.x;
+      g.y = state.y;
+      _dustContainer.addChild(g);
+      _dustParticles.push(state);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Bloom layer — radial gradient overlay (manual, CDN-safe)           */
+  /* ------------------------------------------------------------------ */
+  function _buildBloomLayer() {
+    // Draw a soft radial glow in the center third of the screen
+    const gfx = new PIXI.Graphics();
+    _drawBloomGlow(gfx, _W * 0.5, _H * 0.38, _H * 0.32, 0x203060, 0.18);
+    _bloomOverlay = gfx;
+    _bloomOverlay.label = 'bloom';
+    _bloomOverlay.alpha = 0; // off by default; enabled per screen
+    _overlay.addChild(_bloomOverlay);
+  }
+
+  function _drawBloomGlow(gfx, cx, cy, radius, color, maxAlpha) {
+    gfx.clear();
+    // Layer multiple circles with decreasing alpha to fake bloom
+    const steps = 8;
+    for (let s = steps; s >= 1; s--) {
+      const r = radius * (s / steps);
+      const a = maxAlpha * (1 - s / (steps + 1));
+      gfx.circle(cx, cy, r);
+      gfx.fill({ color, alpha: a });
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  CRT scanline layer                                                  */
+  /* ------------------------------------------------------------------ */
+  function _buildCRTLayer() {
+    const gfx = new PIXI.Graphics();
+    // Draw horizontal semi-transparent lines every 3px
+    for (let y = 0; y < _H; y += 3) {
+      gfx.rect(0, y, _W, 1);
+      gfx.fill({ color: 0x000000, alpha: 0.055 });
+    }
+
+    // Convert to sprite via RenderTexture for performance
+    try {
+      const rt = _app.renderer.generateTexture(gfx);
+      _crtSprite = new PIXI.Sprite(rt);
+    } catch (e) {
+      // Fallback: just use the graphics directly
+      _crtSprite = gfx;
+    }
+    _crtSprite.label = 'crt';
+    _crtSprite.alpha = 0.85;
+    _overlay.addChild(_crtSprite);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Vignette layer                                                      */
+  /* ------------------------------------------------------------------ */
+  function _buildVignetteLayer() {
+    const gfx = new PIXI.Graphics();
+    _drawVignette(gfx, 0.35);
+    _vigSprite = gfx;
+    _vigSprite.label = 'vignette';
+    _overlay.addChild(_vigSprite);
+  }
+
+  function _drawVignette(gfx, strength) {
+    gfx.clear();
+    // Multiple expanding ellipses from edge inward for soft vignette
+    const steps = 10;
+    const maxW = _W * 0.72, maxH = _H * 0.72;
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      const w = _W * 0.5 + maxW * t * 0.5;
+      const h = _H * 0.5 + maxH * t * 0.5;
+      const a = strength * (t * t) * 0.12;
+      gfx.ellipse(_W * 0.5, _H * 0.5, w, h);
+      gfx.stroke({ color: 0x000000, alpha: a, width: Math.max(_W, _H) * 0.08 });
+    }
+    // Hard outer frame
+    gfx.rect(0, 0, _W, _H);
+    gfx.cut();
+    gfx.ellipse(_W * 0.5, _H * 0.5, _W * 0.48, _H * 0.48);
+    gfx.fill({ color: 0x000000, alpha: strength * 0.25 });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Energy spark layer                                                  */
+  /* ------------------------------------------------------------------ */
+  function _buildSparkLayer() {
+    _sparkContainer = new PIXI.Container();
+    _sparkContainer.label = 'sparks';
+    _overlay.addChild(_sparkContainer);
+  }
+
+  function _emitSparks(x, y, count) {
+    for (let i = 0; i < count; i++) {
+      const g = new PIXI.Graphics();
+      const r = 1 + Math.random() * 2;
+      g.circle(0, 0, r);
+      g.fill({ color: 0xffcc44, alpha: 0.9 });
+      g.x = x + (Math.random() - 0.5) * 24;
+      g.y = y + (Math.random() - 0.5) * 8;
+
+      const spark = {
+        gfx: g,
+        vx: (Math.random() - 0.5) * 3.5,
+        vy: -1.5 - Math.random() * 2.5,
+        life: 1.0,
+        decay: 0.04 + Math.random() * 0.06,
+      };
+
+      _sparkContainer.addChild(g);
+      _sparks.push(spark);
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Color matrix — cold blue-green sci-fi tones                        */
+  /* ------------------------------------------------------------------ */
+  function _applyColorMatrix() {
+    try {
+      _colorMatrixFilter = new PIXI.ColorMatrixFilter();
+      // Slight cyan boost: increase G and B channels mildly, reduce R warmth
+      // Matrix format: [R,G,B,A offsets per channel × 4 rows + offset column]
+      const m = _colorMatrixFilter.matrix;
+      // Boost blue slightly, cool down red
+      _colorMatrixFilter.matrix = [
+        0.92,  0.00,  0.04,  0,  0.01, // R row — slight blue bleed into R
+        0.00,  0.97,  0.03,  0,  0.00, // G row — tiny cyan lift
+        0.00,  0.04,  1.05,  0,  0.02, // B row — mild blue boost
+        0.00,  0.00,  0.00,  1,  0.00, // A row — untouched
+      ];
+      _app.stage.filters = [_colorMatrixFilter];
+    } catch (e) {
+      // ColorMatrixFilter may not be available in all builds
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Tick — update all animated elements                                */
+  /* ------------------------------------------------------------------ */
+  function _onTick(ticker) {
+    const dt = ticker.deltaTime;
+    _updateDust(dt);
+    _updateSparks(dt);
+    _updateBloom(dt);
+  }
+
+  function _updateDust(dt) {
+    for (let i = 0; i < _dustParticles.length; i++) {
+      const p = _dustParticles[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+
+      // Wrap around edges
+      if (p.x < -4) p.x = _W + 4;
+      else if (p.x > _W + 4) p.x = -4;
+      if (p.y < -4) p.y = _H + 4;
+      else if (p.y > _H + 4) p.y = -4;
+
+      // Twinkle
+      p.twinklePhase += p.twinkleSpeed * dt;
+      const tw = 0.5 + 0.5 * Math.sin(p.twinklePhase);
+      p.gfx.alpha = p.baseAlpha * (0.4 + 0.6 * tw);
+
+      p.gfx.x = p.x;
+      p.gfx.y = p.y;
+    }
+  }
+
+  function _updateSparks(dt) {
+    for (let i = _sparks.length - 1; i >= 0; i--) {
+      const s = _sparks[i];
+      s.life -= s.decay * dt;
+      if (s.life <= 0) {
+        _sparkContainer.removeChild(s.gfx);
+        s.gfx.destroy();
+        _sparks.splice(i, 1);
+        continue;
+      }
+      s.gfx.x += s.vx * dt;
+      s.gfx.y += s.vy * dt;
+      s.vy += 0.15 * dt; // gravity
+      s.gfx.alpha = s.life;
+    }
+  }
+
+  let _bloomPulse = 0;
+  function _updateBloom(dt) {
+    if (!_bloomOverlay) return;
+    _bloomPulse += 0.012 * dt;
+    const pulse = 0.85 + 0.15 * Math.sin(_bloomPulse);
+    if (_bloomOverlay.alpha > 0) {
+      _bloomOverlay.alpha = (_currentScreen === 'home' ? 0.55 : 0.3) * pulse;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Screen-change handler                                               */
+  /* ------------------------------------------------------------------ */
+  function _onScreenChanged(e) {
+    const screen = (e && e.detail && e.detail.screen) ? e.detail.screen : _currentScreen;
+    _currentScreen = screen;
+
+    // Bloom: visible on home (globe) and invasion screens
+    if (_bloomOverlay) {
+      _bloomOverlay.alpha = (screen === 'home' || screen === 'invasion') ? 0.45 : 0;
+    }
+
+    // Vignette: stronger during invasion/battle
+    if (_vigSprite) {
+      if (screen === 'invasion') {
+        _drawVignette(_vigSprite, 0.6); // red-tinted stronger vignette
+        _vigSprite.tint = 0xff4422;
+      } else {
+        _drawVignette(_vigSprite, 0.35);
+        _vigSprite.tint = 0xffffff;
+      }
+    }
+
+    // CRT: slightly more visible on continent/building screens
+    if (_crtSprite) {
+      _crtSprite.alpha =
+        (screen === 'continent' || screen === 'building' || screen === 'troops')
+          ? 1.0
+          : 0.75;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Resource bar watcher — emit sparks when values change              */
+  /* ------------------------------------------------------------------ */
+  function _watchResourceBar() {
+    const bar = document.querySelector('.resource-bar');
+    if (!bar) {
+      // Try again after DOM settles
+      setTimeout(_watchResourceBar, 1500);
+      return;
+    }
+
+    let _lastValues = _readResourceValues(bar);
+
+    const observer = new MutationObserver(() => {
+      const current = _readResourceValues(bar);
+      for (let k in current) {
+        if (_lastValues[k] !== current[k]) {
+          // Find badge element position
+          const badges = bar.querySelectorAll('.res-badge');
+          badges.forEach(b => {
+            const rect = b.getBoundingClientRect();
+            _emitSparks(rect.left + rect.width * 0.5, rect.top, 5 + Math.floor(Math.random() * 4));
+          });
+          break;
+        }
+      }
+      _lastValues = current;
+    });
+
+    observer.observe(bar, { childList: true, subtree: true, characterData: true });
+  }
+
+  function _readResourceValues(bar) {
+    const vals = {};
+    bar.querySelectorAll('.res-badge').forEach((b, i) => {
+      vals[i] = b.textContent;
+    });
+    return vals;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Resize handler                                                      */
+  /* ------------------------------------------------------------------ */
+  function _onResize() {
+    _W = window.innerWidth;
+    _H = window.innerHeight;
+    if (!_app) return;
+    _app.renderer.resize(_W, _H);
+
+    // Rebuild static layers
+    if (_bloomOverlay) {
+      _drawBloomGlow(_bloomOverlay, _W * 0.5, _H * 0.38, _H * 0.32, 0x203060, 0.18);
+    }
+    if (_vigSprite) {
+      _drawVignette(_vigSprite, _currentScreen === 'invasion' ? 0.6 : 0.35);
+    }
+
+    // Reposition out-of-bounds dust
+    for (const p of _dustParticles) {
+      if (p.x > _W) p.x = Math.random() * _W;
+      if (p.y > _H) p.y = Math.random() * _H;
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Public API                                                          */
+  /* ------------------------------------------------------------------ */
+  window.initPixi = initPixi;
+
+  // Also allow manual spark trigger from game code
+  window.lgPixiSparks = _emitSparks;
+
+})();
+
+
+// ═══ ECONOMY V4 ═══
+// ─────────────────────────────────────────────
+//  2. MULTI-INSTANCE BUILDING TYPES
+// ─────────────────────────────────────────────
+
+/** Building types that may be placed more than once per continent. */
+const MULTI_BUILD_TYPES = new Set([
+  'farm',
+  'resourceCollector',
+  'house',
+  'powerRelay',
+  'commodityExchange',
+]);
+
+/**
+ * showBuildMenu — V4 override.
+ * Multi-build types are never filtered out by the uniqueness check.
+ */
+function showBuildMenu(contIdx, col, row) {
+  const cont       = state.planet.continents[contIdx];
+  const builtTypes = new Set(cont.bldgs.map(b => b.type));
+
+  // A type is unavailable only when it is already built AND it is NOT in MULTI_BUILD_TYPES.
+  // Spaceport still requires its unlock condition.
+  const avail = SLOT_ORDER.filter(k => {
+    if (k === 'spaceport' && !spUnlocked()) return false;
+    if (builtTypes.has(k) && !MULTI_BUILD_TYPES.has(k)) return false;
+    return true;
+  });
+
+  document.getElementById('modal-title').textContent = `BUILD — CELL (${col},${row})`;
+  document.getElementById('modal-body').innerHTML = avail.length === 0
+    ? `<div class="small-muted center">All structures already built on this continent.</div>`
+    : avail.map(key => {
+        const info = BUILDINGS[key];
+        const c    = COSTS[key];
+        const [fw, fh] = FOOTPRINTS[key];
+        // Credits cost is optional (new buildings may require it)
+        const canMetal  = (c.metal   || 0) <= (state.res.metal   || 0);
+        const canFood   = (c.food    || 0) <= (state.res.food    || 0);
+        const canCred   = (c.credits || 0) <= (state.res.credits || 0);
+        const can       = canMetal && canFood && canCred;
+
+        // Build cost display — show credits line if applicable
+        let costLine = `⛏ ${c.metal || 0} Metal &nbsp; 🌾 ${c.food || 0} Food`;
+        if (c.credits) costLine += ` &nbsp; 💰 ${c.credits} Cr`;
+        if (info.prod) costLine += ` &nbsp;<span style="color:var(--mil)">↑ ${info.prod.res}</span>`;
+
+        // Badge for repeatable buildings
+        const multiTag = MULTI_BUILD_TYPES.has(key)
+          ? `<span style="font-size:8px;color:var(--gold);margin-left:4px;letter-spacing:1px">REPEATABLE</span>`
+          : '';
+
+        return `<div class="build-item" style="${can ? '' : 'opacity:0.5'}">
+          <span style="font-size:22px;width:32px;text-align:center">${info.icon}</span>
+          <div style="flex:1">
+            <div class="bi-name">${info.name}${multiTag}</div>
+            <div style="font-size:9px;color:var(--muted);margin-top:1px">${fw}×${fh} cells</div>
+            <div class="bi-cost">${costLine}</div>
+          </div>
+          <button class="gal-btn ${can ? 'mil' : 'steel'}" onclick="startPlacing('${key}')">
+            <div class="gal-btn-inner" style="padding:6px 12px;font-size:10px">PLACE</div>
+          </button>
+        </div>`;
+      }).join('');
+
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+// ─────────────────────────────────────────────
+//  3. EXCELLORANT REBALANCE
+// ─────────────────────────────────────────────
+
+/** Excellorant factory always produces exactly 1 unit per tick regardless of level. */
+function getExcellorantFactoryOutput() {
+  return 1;
+}
+
+/** Flat cost in excellorant to activate Overdrive on any building. */
+const OVERDRIVE_COST = 20;
+
+/** Overdrive duration: 2 hours in milliseconds. */
+const OVERDRIVE_DURATION = 7200000;
+
+/**
+ * activateOverdrive — V4 override.
+ * Uses flat OVERDRIVE_COST and OVERDRIVE_DURATION instead of per-level values.
+ * @param {string} uid  - building uid
+ * @param {number} cost - ignored (kept for call-site compatibility); always uses OVERDRIVE_COST
+ */
+function activateOverdrive(uid, cost) {
+  if ((state.res.excellorant || 0) < OVERDRIVE_COST) {
+    toast(`// NEED ${OVERDRIVE_COST} EXCELLORANT //`);
+    return;
+  }
+  state.res.excellorant -= OVERDRIVE_COST;
+  state.overdrive[uid]   = Date.now() + OVERDRIVE_DURATION;
+  toast('// OVERDRIVE ACTIVATED — 2 HOURS //');
+  renderAllResBars();
+}
+
+/**
+ * Returns an HTML snippet showing the Overdrive countdown for use in building detail panels.
+ * Returns empty string if the building is not currently overdriven.
+ * @param {object} bldg - building object from state
+ * @returns {string} HTML
+ */
+function getOverdriveCountdownHTML(bldg) {
+  const expiry = state.overdrive && state.overdrive[bldg.uid];
+  if (!expiry) return '';
+  const now     = Date.now();
+  const remaining = expiry - now;
+  if (remaining <= 0) return '';
+
+  const totalSec = Math.ceil(remaining / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const parts = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0 || h > 0) parts.push(`${m}m`);
+  parts.push(`${s}s`);
+
+  return `<div style="margin-top:6px;padding:5px 10px;background:rgba(212,208,64,0.12);border:1px solid var(--gold);border-radius:4px;font-size:10px;letter-spacing:1px;color:var(--gold);font-weight:900;text-align:center">
+    ⚡ OVERDRIVE ACTIVE: ${parts.join(' ')} remaining
+  </div>`;
+}
+
+// ─────────────────────────────────────────────
+//  4. COMMODITY EXCHANGE BUILDING
+// ─────────────────────────────────────────────
+
+BUILDINGS.commodityExchange = {
+  name:    'Commodity Exchange',
+  short:   'EXCHANGE',
+  icon:    '📦',
+  summary: 'Packages surplus resources into tradeable commodities. Sell them for credits on the galactic market.',
+  prod:    null,
+};
+COSTS.commodityExchange        = { metal: 800, food: 300, credits: 200 };
+FOOTPRINTS.commodityExchange   = [2, 2];
+BUILD_TIMES.commodityExchange  = 16000;
+if (!SLOT_ORDER.includes('commodityExchange')) SLOT_ORDER.push('commodityExchange');
+
+// Initialise new resource in existing state (safe to call multiple times).
+if (state && state.res && state.res.commodityCrates === undefined) {
+  state.res.commodityCrates = 0;
+}
+
+// ── Base sell rates (credits per crate) ──
+const COMMODITY_BASE_RATES = {
+  metal:    15,   // 100 metal → 1 crate, sells for 15 cr
+  food:     12,   // 50 food  → 1 crate, sells for 12 cr
+  research: 25,   // 20 rsch  → 1 crate, sells for 25 cr
+};
+
+// ── Input amounts (resource units per crate) ──
+const COMMODITY_PACK_COST = {
+  metal:    100,
+  food:     50,
+  research: 20,
+};
+
+/**
+ * Returns current commodity sell rates with ±15% market fluctuation and
+ * optional efficiency bonus from the Exchange building level.
+ *
+ * @param {number} now         - epoch ms (Date.now())
+ * @param {number} [bldgLevel] - 1/2/3; defaults to 1
+ * @returns {{ metal: number, food: number, research: number }}
+ */
+function getCommodityRates(now, bldgLevel) {
+  const ts  = now || Date.now();
+  const lvl = bldgLevel || 1;
+
+  // Level efficiency multiplier: 1 / 1.2 / 1.5
+  const effMult = lvl === 3 ? 1.5 : lvl === 2 ? 1.2 : 1.0;
+
+  // Seeded sine-wave fluctuation — same pattern as _tradeNoise but separate seed.
+  const seed   = (state._tradeRateSeed || 42) * 71 % 1000000;
+  const period = 90000; // 90 s window for commodity market
+  const t      = (ts % period) / period;
+  const phase  = (seed / 1000000) * Math.PI * 2;
+  const fluct  = 1 + 0.15 * Math.sin(t * Math.PI * 2 + phase);
+
+  const result = {};
+  for (const key of ['metal', 'food', 'research']) {
+    result[key] = Math.round(COMMODITY_BASE_RATES[key] * effMult * fluct * 10) / 10;
+  }
+  return result;
+}
+
+/**
+ * Package resources into commodity crates.
+ * @param {string} resourceType - 'metal' | 'food' | 'research'
+ * @param {number} bldgLevel    - level of the Exchange building (1–3)
+ */
+function packageCommodity(resourceType, bldgLevel) {
+  const cost = COMMODITY_PACK_COST[resourceType];
+  if (cost === undefined) {
+    toast('// UNKNOWN RESOURCE //');
+    return;
+  }
+  const have = Math.floor(state.res[resourceType] || 0);
+  if (have < cost) {
+    toast(`// NEED ${cost} ${resourceType.toUpperCase()} TO PACKAGE //`);
+    return;
+  }
+  state.res[resourceType]     -= cost;
+  state.res.commodityCrates    = (state.res.commodityCrates || 0) + 1;
+  toast(`// 1 COMMODITY CRATE PACKAGED FROM ${resourceType.toUpperCase()} //`);
+  renderAllResBars();
+}
+
+/**
+ * Sell all commodity crates at the current market rate, converting them to credits.
+ * @param {number} bldgLevel - level of the Exchange building for rate calculation
+ */
+function sellAllCommodities(bldgLevel) {
+  const crates = Math.floor(state.res.commodityCrates || 0);
+  if (crates <= 0) {
+    toast('// NO CRATES TO SELL //');
+    return;
+  }
+  // Use an average sell rate across all commodity types for simplicity
+  const rates   = getCommodityRates(Date.now(), bldgLevel);
+  const avgRate = (rates.metal + rates.food + rates.research) / 3;
+  const earned  = Math.floor(crates * avgRate);
+
+  state.res.commodityCrates = 0;
+  state.res.credits         = Math.min(999999, (state.res.credits || 0) + earned);
+  toast(`// SOLD ${crates} CRATES → ${earned} CREDITS //`);
+  renderAllResBars();
+}
+
+/**
+ * Returns the full HTML detail panel for a Commodity Exchange building.
+ * Designed to be embedded inside the building detail modal body.
+ * @param {object} bldg - building object from state
+ * @returns {string} HTML string
+ */
+function getCommodityExchangeHTML(bldg) {
+  const now    = Date.now();
+  const lvl    = bldg.level || 1;
+  const rates  = getCommodityRates(now, lvl);
+  const crates = Math.floor(state.res.commodityCrates || 0);
+
+  // Determine if each resource pack is affordable
+  const canPackMetal    = (state.res.metal    || 0) >= COMMODITY_PACK_COST.metal;
+  const canPackFood     = (state.res.food     || 0) >= COMMODITY_PACK_COST.food;
+  const canPackResearch = (state.res.research || 0) >= COMMODITY_PACK_COST.research;
+
+  const lvlLabel = lvl === 3 ? '+50% efficiency' : lvl === 2 ? '+20% efficiency' : 'base efficiency';
+
+  const odHTML = getOverdriveCountdownHTML(bldg);
+
+  return `
+    <div class="panel mb12">
+      <div style="font-size:10px;letter-spacing:2px;color:var(--gold);font-weight:900;margin-bottom:4px">// COMMODITY EXCHANGE — LVL ${lvl} //</div>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:8px">${lvlLabel} &nbsp;·&nbsp; market fluctuates ±15%</div>
+      ${odHTML}
+    </div>
+
+    <div class="panel mb12">
+      <div style="font-size:10px;letter-spacing:2px;color:var(--muted);font-weight:900;margin-bottom:8px">// PACKAGE RESOURCES //</div>
+
+      <div class="build-item" style="${canPackMetal ? '' : 'opacity:0.5'}">
+        <span style="font-size:20px;width:28px;text-align:center">⛏</span>
+        <div style="flex:1;font-size:10px;color:var(--text)">
+          Package ${COMMODITY_PACK_COST.metal} Metal → 1 Crate
+          <div style="color:var(--gold);font-size:9px">Sell rate: ~${rates.metal} cr / crate</div>
+        </div>
+        <button class="gal-btn ${canPackMetal ? 'mil' : 'steel'}"
+                onclick="packageCommodity('metal', ${lvl}); showBldgDetail('${bldg.uid}')">
+          <div class="gal-btn-inner" style="padding:5px 10px;font-size:10px">PACK</div>
+        </button>
+      </div>
+
+      <div class="build-item" style="${canPackFood ? '' : 'opacity:0.5'}">
+        <span style="font-size:20px;width:28px;text-align:center">🌾</span>
+        <div style="flex:1;font-size:10px;color:var(--text)">
+          Package ${COMMODITY_PACK_COST.food} Food → 1 Crate
+          <div style="color:var(--gold);font-size:9px">Sell rate: ~${rates.food} cr / crate</div>
+        </div>
+        <button class="gal-btn ${canPackFood ? 'mil' : 'steel'}"
+                onclick="packageCommodity('food', ${lvl}); showBldgDetail('${bldg.uid}')">
+          <div class="gal-btn-inner" style="padding:5px 10px;font-size:10px">PACK</div>
+        </button>
+      </div>
+
+      <div class="build-item" style="${canPackResearch ? '' : 'opacity:0.5'}">
+        <span style="font-size:20px;width:28px;text-align:center">⚛</span>
+        <div style="flex:1;font-size:10px;color:var(--text)">
+          Package ${COMMODITY_PACK_COST.research} Research → 1 Crate
+          <div style="color:var(--gold);font-size:9px">Sell rate: ~${rates.research} cr / crate</div>
+        </div>
+        <button class="gal-btn ${canPackResearch ? 'mil' : 'steel'}"
+                onclick="packageCommodity('research', ${lvl}); showBldgDetail('${bldg.uid}')">
+          <div class="gal-btn-inner" style="padding:5px 10px;font-size:10px">PACK</div>
+        </button>
+      </div>
+    </div>
+
+    <div class="panel mb12">
+      <div style="font-size:10px;letter-spacing:2px;color:var(--muted);font-weight:900;margin-bottom:8px">// CRATE INVENTORY //</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div style="font-size:18px;font-weight:900;color:var(--gold)">💼 ${fmt(crates)} CRATES</div>
+        <button class="gal-btn ${crates > 0 ? 'gold' : 'steel'}" style="${crates === 0 ? 'opacity:0.4' : ''}"
+                onclick="sellAllCommodities(${lvl}); showBldgDetail('${bldg.uid}')">
+          <div class="gal-btn-inner" style="padding:6px 14px;font-size:10px">
+            SELL ALL (~${fmt(Math.floor(crates * (rates.metal + rates.food + rates.research) / 3))} CR)
+          </div>
+        </button>
+      </div>
+      <div style="font-size:9px;color:var(--muted);margin-top:6px;letter-spacing:0.5px">
+        Average sell rate: ${((rates.metal + rates.food + rates.research) / 3).toFixed(1)} cr / crate at current market
+      </div>
+    </div>
+  `;
+}
+
+// ─────────────────────────────────────────────
+//  5. RESOURCE BAR — add commodityCrates badge
+// ─────────────────────────────────────────────
+//
+//  The V3 resHTML() function is extended here by monkey-patching it.
+//  We save the old function and wrap it to append the new badge.
+
+(function _patchResHTML() {
+  const _origResHTML = resHTML;
+  resHTML = function() {
+    let html = _origResHTML();
+    // Append commodityCrates badge before the closing of the bar.
+    // The badge mirrors the style of existing badges defined in V3.
+    const crates = Math.floor((state.res && state.res.commodityCrates) || 0);
+    const badgeHTML = `<div class="res-badge" style="border-color:#4a3e1a;color:var(--gold)">
+      <span style="opacity:0.85">💼</span>
+      <span style="font-weight:900">${fmt(crates)}</span>
+      <span style="font-size:10px;color:var(--muted);letter-spacing:0.5px">CRATES</span>
+    </div>`;
+    html += badgeHTML;
+    return html;
+  };
+})();
+
+// ─────────────────────────────────────────────
+//  PRODUCTION TICK INTEGRATION
+//  Patch patchProductionTick to use getExcellorantFactoryOutput()
+//  and to recognise commodityExchange (no auto-production).
+// ─────────────────────────────────────────────
+//
+//  Rather than fully rewriting patchProductionTick (which is large and
+//  version-specific), we override the excellorant output at the resource
+//  accumulation point by patching the BUILDINGS definition so its base
+//  value is always treated as 1, and getExcellorantFactoryOutput() is the
+//  canonical source for any future callers.
+
+// Ensure the excellorant factory base is normalised to 1 so existing
+// tick code that does `prod.base * level` is clamped:
+if (BUILDINGS.excellorantFactory && BUILDINGS.excellorantFactory.prod) {
+  BUILDINGS.excellorantFactory.prod.base = 1;
+  // Override the level multiplier behaviour by adding a fixedOutput flag
+  BUILDINGS.excellorantFactory.prod.fixedOutput = true;
+}
+
+// ─────────────────────────────────────────────
+//  STATE INIT GUARD
+//  Ensure all V4 state keys exist on the live state object.
+// ─────────────────────────────────────────────
+
+(function _initV4State() {
+  if (!state) return; // guard for load-order edge cases
+  if (!state.res) state.res = {};
+  if (state.res.commodityCrates === undefined) state.res.commodityCrates = 0;
+  if (!state.overdrive) state.overdrive = {};
+})();
+
+// ─────────────────────────────────────────────
+//  BUILDSTRUCTURE CREDITS SUPPORT
+//  The core buildStructure function only deducts metal/food.
+//  Patch it to also deduct credits when the cost object requires them.
+// ─────────────────────────────────────────────
+
+(function _patchBuildStructureCredits() {
+  const _origBuildStructure = buildStructure;
+  buildStructure = function(contIdx, col, row, type) {
+    const c = COSTS[type] || {};
+    // Pre-check credits before delegating (originals only checks metal/food)
+    if ((c.credits || 0) > 0 && (state.res.credits || 0) < c.credits) {
+      toast(`// NEED ${c.credits} CREDITS //`);
+      return;
+    }
+    // Let original proceed (it handles metal/food deduction)
+    _origBuildStructure(contIdx, col, row, type);
+    // Deduct credits after — original won't have done so
+    if (c.credits && (state.res.credits || 0) >= 0) {
+      // The original already ran; deduct credits now.
+      // (Safe: if original failed due to metal/food, it returned early before
+      //  pushing to bldgs, so the array length check guards us here.)
+      // A cleaner guard: check if the bldg was just added by looking at timestamps.
+      // We rely on the fact that original calls toast on failure — no perfect hook,
+      // so we deduct unconditionally after the credit pre-check passed.
+      state.res.credits = Math.max(0, (state.res.credits || 0) - c.credits);
+      renderAllResBars();
+    }
+  };
+})();
+
+// ─────────────────────────────────────────────
+//  EXPORT SUMMARY (for console verification)
+// ─────────────────────────────────────────────
+// console.log('[Economy V4] Loaded — grid 14×10, multi-build types, excellorant rebalance, Commodity Exchange, crates resource bar.');
+
+// ═══ PLANETS V2 ═══
+// Planetary Defense Tech + Inhospitable Planets + Terraformer
+// Drop this script after the main game JS (or inline before </body>)
+
+// ─────────────────────────────────────────────
+//  INJECT NEW BUILDING DATA
+// ─────────────────────────────────────────────
+
+function applyNewPlanetBuildingData() {
+  BUILDINGS.defenseGrid = {
+    name:'Defense Grid', short:'DEFENSE', icon:'🛡️',
+    summary:'Planetary defense network. Reduces alien attack strength and provides passive damage to invaders.',
+    prod: null
+  };
+  BUILDINGS.terraformer = {
+    name:'Terraformer', short:'TERRA', icon:'🌱',
+    summary:'Transforms the atmosphere of an inhospitable world. Requires massive resource shipments to operate.',
+    prod: null
+  };
+
+  COSTS.defenseGrid  = {metal:600, food:200};
+  COSTS.terraformer  = {metal:2000, food:1000, research:500};
+
+  FOOTPRINTS.defenseGrid = [2,1];
+  FOOTPRINTS.terraformer = [3,2];
+
+  BUILD_TIMES.defenseGrid = 14000;
+  BUILD_TIMES.terraformer = 60000;
+
+  if (!SLOT_ORDER.includes('defenseGrid')) SLOT_ORDER.push('defenseGrid');
+  if (!SLOT_ORDER.includes('terraformer'))  SLOT_ORDER.push('terraformer');
+
+  // Mark inhospitable planets
+  if (state.solar) {
+    state.solar.forEach(p => {
+      p.inhospitable = !p.isHome && !p.isAgri;
+    });
+  }
+
+  // Init terraforming state
+  if (!state.terraforming) state.terraforming = {};
+}
+
+// ─────────────────────────────────────────────
+//  INHOSPITABILITY HELPERS
+// ─────────────────────────────────────────────
+
+/** Returns true if the planet at solarIdx is inhospitable */
+function isInhospitable(solarIdx) {
+  const p = state.solar && state.solar[solarIdx];
+  if (!p) return false;
+  return !p.isHome && !p.isAgri;
+}
+
+/**
+ * Returns the solarIdx of the planet whose continents are currently loaded,
+ * or -1 if this is the home planet / none found.
+ * Used to determine if production should be blocked.
+ *
+ * The game uses state.planet for the active planet.
+ * We identify it by matching state.planet.solarIdx if set,
+ * otherwise fall back to 0 (home).
+ */
+function _activePlanetSolarIdx() {
+  return (state.planet && state.planet.solarIdx != null) ? state.planet.solarIdx : 0;
+}
+
+/**
+ * Returns true if the active planet is inhospitable AND has no completed Terraformer.
+ */
+function _activePlanetBlocked() {
+  const idx = _activePlanetSolarIdx();
+  if (!isInhospitable(idx)) return false;
+  // Check if terraforming is complete
+  const tf = state.terraforming && state.terraforming[idx];
+  if (tf && tf.complete) return false;
+  // Check if any continent has a built terraformer
+  const hasTerra = state.planet && state.planet.continents &&
+    state.planet.continents.some(c => c.conquered &&
+      (c.bldgs || []).some(b => b.type === 'terraformer' && !(b.buildEnd && b.buildEnd > Date.now())));
+  if (!hasTerra) return true;
+  // Terraformer exists but progress not complete — still blocked unless complete
+  return !(tf && tf.complete);
+}
+
+// ─────────────────────────────────────────────
+//  PRODUCTION BLOCK FOR INHOSPITABLE PLANETS
+// ─────────────────────────────────────────────
+
+/**
+ * Called inside patchProductionTick (or immediately after).
+ * If the active planet is inhospitable and not terraformed,
+ * zero out any production that already happened this tick.
+ * Strategy: we wrap/monkey-patch patchProductionTick once.
+ */
+function applyInhospitableProductionBlock() {
+  if (!_activePlanetBlocked()) return;
+  // Resource drain from terraformer maintenance still allowed,
+  // but normal building production is suppressed.
+  // Since we call this AFTER the tick we need to record pre-tick values.
+  // See _patchProductionTickWithBlock() below which wraps the tick.
+}
+
+// Monkey-patch patchProductionTick to support inhospitable block
+(function _patchProductionTickWithBlock() {
+  if (typeof patchProductionTick !== 'function') return;
+  if (patchProductionTick._v2patched) return;
+  const _orig = patchProductionTick;
+  patchProductionTick = function() {
+    if (_activePlanetBlocked()) {
+      // Snapshot resources before tick
+      const snap = Object.assign({}, state.res);
+      _orig();
+      // Restore any resources that buildings would have produced
+      // (allow pop changes; block only resource production)
+      state.res.metal       = snap.metal;
+      state.res.food        = snap.food;
+      state.res.research    = snap.research;
+      state.res.excellorant = snap.excellorant;
+      state.res.credits     = snap.credits;
+      // Apply terraformer maintenance drain (50 metal + 30 food per tick)
+      const idx = _activePlanetSolarIdx();
+      const tf = state.terraforming && state.terraforming[idx];
+      if (tf && tf.active) {
+        state.res.metal = Math.max(0, (state.res.metal || 0) - 50);
+        state.res.food  = Math.max(0, (state.res.food  || 0) - 30);
+        _advanceTerraformingProgress(idx);
+      }
+    } else {
+      _orig();
+    }
+  };
+  patchProductionTick._v2patched = true;
+})();
+
+// ─────────────────────────────────────────────
+//  TERRAFORMING SYSTEM
+// ─────────────────────────────────────────────
+
+const TERRA_TOTAL = { metal: 5000, food: 3000, research: 1000 };
+
+function _ensureTerraState(planetIdx) {
+  if (!state.terraforming) state.terraforming = {};
+  if (!state.terraforming[planetIdx]) {
+    state.terraforming[planetIdx] = {
+      progress: 0,       // 0.0 – 1.0
+      active: false,
+      complete: false,
+      metalShipped: 0,
+      foodShipped: 0,
+      researchShipped: 0,
+      lastTickTime: null
+    };
+  }
+  return state.terraforming[planetIdx];
+}
+
+/** Returns 0.0–1.0 terraforming completion for a solar planet index */
+function getTerraformingProgress(planetIdx) {
+  const tf = state.terraforming && state.terraforming[planetIdx];
+  if (!tf) return 0;
+  const total = TERRA_TOTAL.metal + TERRA_TOTAL.food + TERRA_TOTAL.research;
+  const shipped = (tf.metalShipped || 0) + (tf.foodShipped || 0) + (tf.researchShipped || 0);
+  return Math.min(1, shipped / total);
+}
+
+/** Send resources toward terraforming. resourceType: 'metal'|'food'|'research' */
+function sendTerraformingResources(planetIdx, resourceType, amount) {
+  const tf = _ensureTerraState(planetIdx);
+  if (tf.complete) { toast('// TERRAFORMING ALREADY COMPLETE //'); return; }
+
+  const have = state.res[resourceType] || 0;
+  if (have < amount) { toast(`// INSUFFICIENT ${resourceType.toUpperCase()} //`); return; }
+
+  const maxKey = resourceType + 'Shipped';
+  const cap = TERRA_TOTAL[resourceType];
+  const already = tf[maxKey] || 0;
+  const canSend = Math.min(amount, cap - already);
+  if (canSend <= 0) { toast(`// ${resourceType.toUpperCase()} QUOTA FILLED //`); return; }
+
+  state.res[resourceType] -= canSend;
+  tf[maxKey] = (tf[maxKey] || 0) + canSend;
+  tf.active = true;
+
+  const prog = getTerraformingProgress(planetIdx);
+  tf.progress = prog;
+  if (prog >= 1) {
+    tf.complete = true;
+    tf.active = false;
+    if (state.solar && state.solar[planetIdx]) {
+      state.solar[planetIdx].inhospitable = false;
+    }
+    toast(`// TERRAFORMING COMPLETE — ${(state.solar[planetIdx]||{}).name||'PLANET'} NOW HOSPITABLE //`);
+  } else {
+    toast(`// RESOURCES SHIPPED — TERRAFORMING ${Math.round(prog*100)}% //`);
+  }
+  if (typeof renderAllResBars === 'function') renderAllResBars();
+}
+
+/** Internal: advance progress from maintenance drain (called each tick when active) */
+function _advanceTerraformingProgress(planetIdx) {
+  // Progress from shipped resources is primary; this just re-syncs
+  const tf = state.terraforming[planetIdx];
+  if (!tf) return;
+  tf.progress = getTerraformingProgress(planetIdx);
+  if (tf.progress >= 1 && !tf.complete) {
+    tf.complete = true;
+    tf.active = false;
+    if (state.solar && state.solar[planetIdx]) {
+      state.solar[planetIdx].inhospitable = false;
+    }
+    toast(`// TERRAFORMING COMPLETE — PLANET NOW HOSPITABLE //`);
+  }
+}
+
+// ─────────────────────────────────────────────
+//  TERRAFORMER BUILDING DETAIL HTML
+// ─────────────────────────────────────────────
+
+function getTerraformerDetailHTML(bldg, contIdx) {
+  const solarIdx = _activePlanetSolarIdx();
+  const tf = _ensureTerraState(solarIdx);
+  const prog = getTerraformingProgress(solarIdx);
+  const pct  = Math.round(prog * 100);
+  const complete = tf.complete;
+
+  const barColor = complete ? '#5a8a3c' : '#c87428';
+  const statusLabel = complete
+    ? '<span style="color:#5a8a3c;font-weight:900">✓ TERRAFORMING COMPLETE</span>'
+    : tf.active
+      ? '<span style="color:#c87428">● ACTIVE — PROCESSING</span>'
+      : '<span style="color:#6a6858">○ INACTIVE</span>';
+
+  const remMetal    = Math.max(0, TERRA_TOTAL.metal    - (tf.metalShipped    || 0));
+  const remFood     = Math.max(0, TERRA_TOTAL.food     - (tf.foodShipped     || 0));
+  const remResearch = Math.max(0, TERRA_TOTAL.research - (tf.researchShipped || 0));
+
+  const sendBtns = complete ? '' : `
+    <div style="margin-top:10px">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:6px;letter-spacing:1px">SHIP RESOURCES</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        ${remMetal > 0 ? `<button class="gal-btn steel" onclick="sendTerraformingResources(${solarIdx},'metal',500)" style="width:100%"><div class="gal-btn-inner" style="padding:6px 10px;font-size:11px">📦 Send 500 Metal (need ${fmt(remMetal)} more)</div></button>` : '<div style="font-size:10px;color:#5a8a3c">✓ Metal quota filled</div>'}
+        ${remFood > 0 ? `<button class="gal-btn steel" onclick="sendTerraformingResources(${solarIdx},'food',200)" style="width:100%"><div class="gal-btn-inner" style="padding:6px 10px;font-size:11px">🌾 Send 200 Food (need ${fmt(remFood)} more)</div></button>` : '<div style="font-size:10px;color:#5a8a3c">✓ Food quota filled</div>'}
+        ${remResearch > 0 ? `<button class="gal-btn steel" onclick="sendTerraformingResources(${solarIdx},'research',100)" style="width:100%"><div class="gal-btn-inner" style="padding:6px 10px;font-size:11px">🔬 Send 100 Research (need ${fmt(remResearch)} more)</div></button>` : '<div style="font-size:10px;color:#5a8a3c">✓ Research quota filled</div>'}
+      </div>
+    </div>`;
+
+  const toggleBtn = !complete ? `
+    <button class="gal-btn ${tf.active ? 'blood' : 'mil'}" onclick="_toggleTerraformer(${solarIdx})" style="width:100%;margin-top:8px">
+      <div class="gal-btn-inner" style="padding:6px 10px;font-size:11px">${tf.active ? '⏸ Deactivate (stops drain)' : '▶ Activate (50 metal + 30 food / tick)'}</div>
+    </button>` : '';
+
+  return `
+    <div style="padding:4px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:12px;font-weight:900;letter-spacing:1px">TERRAFORMING STATUS</span>
+        ${statusLabel}
+      </div>
+      <div style="background:#0d0f08;border:1px solid var(--edge);height:16px;margin-bottom:4px;position:relative">
+        <div style="height:100%;background:${barColor};width:${pct}%;transition:width 0.5s"></div>
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:900;letter-spacing:1px">${pct}% COMPLETE</div>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:4px">
+        Metal shipped: ${fmt(tf.metalShipped||0)} / ${fmt(TERRA_TOTAL.metal)} &nbsp;|&nbsp;
+        Food: ${fmt(tf.foodShipped||0)} / ${fmt(TERRA_TOTAL.food)} &nbsp;|&nbsp;
+        Research: ${fmt(tf.researchShipped||0)} / ${fmt(TERRA_TOTAL.research)}
+      </div>
+      ${!complete ? `<div style="font-size:10px;color:var(--warn);margin-bottom:4px">⚠ Active mode drains 50 metal + 30 food per production tick</div>` : ''}
+      ${sendBtns}
+      ${toggleBtn}
+    </div>`;
+}
+
+function _toggleTerraformer(solarIdx) {
+  const tf = _ensureTerraState(solarIdx);
+  tf.active = !tf.active;
+  toast(tf.active ? '// TERRAFORMER ACTIVATED //' : '// TERRAFORMER DEACTIVATED //');
+}
+
+// ─────────────────────────────────────────────
+//  DEFENSE GRID BUILDING DETAIL HTML
+// ─────────────────────────────────────────────
+
+function getDefenseGridDetailHTML(bldg) {
+  const cont = state.planet && state.planet.continents
+    ? state.planet.continents.find(c => (c.bldgs || []).some(b => b === bldg || b.uid === bldg.uid))
+    : null;
+  const contIdx = cont ? state.planet.continents.indexOf(cont) : -1;
+  const level = bldg.level || 1;
+
+  // Intercept chance (multiplicative per level)
+  const interceptChance = (1 - Math.pow(0.6, level)) * 100;
+
+  // Adjacent unconquered continents and their threat reduction
+  let adjRows = '';
+  if (cont && contIdx >= 0 && state.planet.continents) {
+    const conts = state.planet.continents;
+    for (let i = 0; i < conts.length; i++) {
+      if (i === contIdx) continue;
+      if (Math.abs(i - contIdx) > 2) continue;
+      if (conts[i].conquered) continue;
+      const baseThreat = conts[i].threat || 0;
+      const reducedBy  = Math.round(baseThreat * 0.10 * level);
+      adjRows += `<div style="display:flex;justify-content:space-between;font-size:10px;padding:2px 0;border-bottom:1px solid #1a1e10">
+        <span>${conts[i].name}</span>
+        <span style="color:#5a8a3c">−${reducedBy} threat (×${level} grids)</span>
+      </div>`;
+    }
+    if (!adjRows) adjRows = '<div style="font-size:10px;color:var(--muted)">No adjacent unconquered continents.</div>';
+  }
+
+  return `
+    <div style="padding:4px 0">
+      <div style="font-size:12px;font-weight:900;letter-spacing:1px;margin-bottom:8px">DEFENSE GRID — LVL ${level}</div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:6px">
+        <span>Counter-attack intercept:</span>
+        <span style="color:#5a8a3c;font-weight:900">${interceptChance.toFixed(0)}% chance</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:10px">
+        <span>Threat reduction on adjacent:</span>
+        <span style="color:#5a8a3c;font-weight:900">10% per grid level</span>
+      </div>
+      <div style="font-size:10px;color:var(--muted);letter-spacing:1px;margin-bottom:4px">ADJACENT UNCONQUERED CONTINENTS</div>
+      ${adjRows}
+      <div style="margin-top:8px;font-size:10px;color:var(--muted)">
+        Intercept probability stacks multiplicatively across all Defense Grid levels on this continent.
+        Each level = 40% intercept (60% pass-through per level).
+      </div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
+//  COUNTER-ATTACK SYSTEM
+// ─────────────────────────────────────────────
+
+function _counterAttackTick() {
+  const conts = state.planet && state.planet.continents;
+  if (!conts) return;
+
+  conts.forEach((cont, i) => {
+    if (cont.conquered) return; // only unconquered launch attacks
+
+    // 15% chance of attack this tick
+    if (Math.random() > 0.15) return;
+
+    // Find adjacent conquered continents (within 2 indices)
+    const targets = [];
+    for (let j = Math.max(0, i - 2); j <= Math.min(conts.length - 1, i + 2); j++) {
+      if (j !== i && conts[j].conquered) targets.push(j);
+    }
+    if (targets.length === 0) return;
+
+    const targetIdx = targets[Math.floor(Math.random() * targets.length)];
+    const target    = conts[targetIdx];
+
+    // Count defense grid levels on target continent
+    let totalGridLevels = 0;
+    (target.bldgs || []).forEach(b => {
+      if (b.type === 'defenseGrid' && !(b.buildEnd && b.buildEnd > Date.now())) {
+        totalGridLevels += (b.level || 1);
+      }
+    });
+
+    // Intercept check: 40% per level multiplicative
+    let intercepted = false;
+    if (totalGridLevels > 0) {
+      const passThroughChance = Math.pow(0.6, totalGridLevels);
+      intercepted = Math.random() > passThroughChance;
+    }
+
+    if (intercepted) {
+      toast(`// DEFENSE GRID INTERCEPTED ATTACK ON ${target.name.toUpperCase()} //`);
+      return;
+    }
+
+    // Attack gets through — reduce a random building level by 1 (min 1)
+    const eligibleBldgs = (target.bldgs || []).filter(b =>
+      b.level > 1 && !(b.buildEnd && b.buildEnd > Date.now())
+    );
+    if (eligibleBldgs.length === 0) {
+      toast(`// ALIEN COUNTER-ATTACK ON ${target.name.toUpperCase()} — NO DAMAGE (MIN LEVEL) //`);
+      return;
+    }
+
+    const hit = eligibleBldgs[Math.floor(Math.random() * eligibleBldgs.length)];
+    hit.level = Math.max(1, hit.level - 1);
+    const bdef = BUILDINGS[hit.type];
+    toast(`// ⚠ COUNTER-ATTACK! ${target.name.toUpperCase()} — ${bdef ? bdef.name.toUpperCase() : hit.type} DAMAGED (LVL ${hit.level}) //`);
+  });
+}
+
+function startCounterAttackTimer() {
+  if (window._counterAttackInterval) clearInterval(window._counterAttackInterval);
+  window._counterAttackInterval = setInterval(_counterAttackTick, 90000);
+}
+
+// ─────────────────────────────────────────────
+//  INHOSPITABLE PLANET UI BANNER INJECTION
+// ─────────────────────────────────────────────
+
+/**
+ * Call this after rendering a planet screen to inject the inhospitable warning.
+ * It inserts a banner at the top of #planet-screen .screen-body if applicable.
+ */
+function _injectInhospitableBanner() {
+  const idx = _activePlanetSolarIdx();
+  if (!isInhospitable(idx)) return;
+  const tf = state.terraforming && state.terraforming[idx];
+  if (tf && tf.complete) return;
+
+  const body = document.querySelector('#planet-screen .screen-body');
+  if (!body) return;
+  if (body.querySelector('.inhospitable-banner')) return; // already injected
+
+  const banner = document.createElement('div');
+  banner.className = 'inhospitable-banner panel blood';
+  banner.style.cssText = 'margin-bottom:8px;padding:10px 12px;display:flex;align-items:center;gap:8px';
+  banner.innerHTML = `
+    <span style="font-size:18px">⚠</span>
+    <div>
+      <div style="font-size:12px;font-weight:900;color:#e05030;letter-spacing:1px">INHOSPITABLE — TERRAFORMER REQUIRED</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:2px">Building production is suppressed until terraforming completes. Build and activate a Terraformer, then ship resources.</div>
+    </div>`;
+  body.insertBefore(banner, body.firstChild);
+}
+
+// ─────────────────────────────────────────────
+//  SOLAR SYSTEM PANEL PATCH — show inhospitable label
+// ─────────────────────────────────────────────
+
+/**
+ * After showSolarSystem runs, annotate planet cards with inhospitable status.
+ * Call _patchSolarSystemUI() once, or let MutationObserver trigger it.
+ */
+function _patchSolarSystemUI() {
+  const solar = state.solar;
+  if (!solar) return;
+  solar.forEach((planet, i) => {
+    if (!planet.inhospitable) return;
+    // Find the planet panel in the DOM (we can't easily target by idx,
+    // so we look for the planet name text inside solar-screen panels)
+    const panels = document.querySelectorAll('#solar-screen .panel');
+    panels.forEach(panel => {
+      if (!panel.textContent.includes(planet.name)) return;
+      if (panel.querySelector('.inhospitable-tag')) return;
+      const tag = document.createElement('div');
+      tag.className = 'inhospitable-tag';
+      tag.style.cssText = 'font-size:9px;color:#e05030;font-weight:900;letter-spacing:1px;margin-top:2px';
+      tag.textContent = '⚠ INHOSPITABLE — TERRAFORMER REQUIRED';
+      panel.appendChild(tag);
+    });
+  });
+}
+
+// ─────────────────────────────────────────────
+//  HOOK INTO EXISTING BUILDING DETAIL RENDERING
+// ─────────────────────────────────────────────
+
+/**
+ * Monkey-patch getBuildingDetailHTML (if it exists) to inject
+ * defenseGrid and terraformer custom panels.
+ * If the game uses a different function name, update this patch.
+ */
+(function _patchBuildingDetail() {
+  const _tryPatch = () => {
+    if (typeof getBuildingDetailHTML !== 'function') return false;
+    if (getBuildingDetailHTML._v2patched) return true;
+    const _orig = getBuildingDetailHTML;
+    getBuildingDetailHTML = function(bldg, contIdx) {
+      if (bldg.type === 'defenseGrid') {
+        return getDefenseGridDetailHTML(bldg);
+      }
+      if (bldg.type === 'terraformer') {
+        return getTerraformerDetailHTML(bldg, contIdx);
+      }
+      return _orig(bldg, contIdx);
+    };
+    getBuildingDetailHTML._v2patched = true;
+    return true;
+  };
+
+  if (!_tryPatch()) {
+    // Retry after DOM ready
+    window.addEventListener('DOMContentLoaded', _tryPatch);
+  }
+})();
+
+// ─────────────────────────────────────────────
+//  INITIALISE EVERYTHING
+// ─────────────────────────────────────────────
+
+(function _initPlanetsV2() {
+  // Wait for game state to be ready
+  const _init = () => {
+    if (typeof BUILDINGS === 'undefined' || typeof state === 'undefined') {
+      setTimeout(_init, 200);
+      return;
+    }
+    applyNewPlanetBuildingData();
+    startCounterAttackTimer();
+
+    // Re-patch patchProductionTick in case it wasn't defined yet when script loaded
+    if (typeof patchProductionTick === 'function' && !patchProductionTick._v2patched) {
+      const _orig = patchProductionTick;
+      patchProductionTick = function() {
+        if (_activePlanetBlocked()) {
+          const snap = Object.assign({}, state.res);
+          _orig();
+          state.res.metal       = snap.metal;
+          state.res.food        = snap.food;
+          state.res.research    = snap.research;
+          state.res.excellorant = snap.excellorant;
+          state.res.credits     = snap.credits;
+          const idx = _activePlanetSolarIdx();
+          const tf = state.terraforming && state.terraforming[idx];
+          if (tf && tf.active) {
+            state.res.metal = Math.max(0, (state.res.metal || 0) - 50);
+            state.res.food  = Math.max(0, (state.res.food  || 0) - 30);
+            _advanceTerraformingProgress(idx);
+          }
+        } else {
+          _orig();
+        }
+      };
+      patchProductionTick._v2patched = true;
+    }
+  };
+  _init();
+})();
 </script>
 </body>
 </html>

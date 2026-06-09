@@ -429,11 +429,7 @@ const state={
   troopResearchDone:new Set(),
   overdrive:{},
   _uid:0,
-  invasion:{contIdx:0,lanes:[
-    {inf1:0,inf2:0,inf3:0,tnk1:0,tnk2:0,tnk3:0,cav1:0,cav2:0,cav3:0},
-    {inf1:0,inf2:0,inf3:0,tnk1:0,tnk2:0,tnk3:0,cav1:0,cav2:0,cav3:0},
-    {inf1:0,inf2:0,inf3:0,tnk1:0,tnk2:0,tnk3:0,cav1:0,cav2:0,cav3:0},
-  ],phase:'deploy'},
+  invasion:{contIdx:0,phase:'deploy',playerUnits:[],enemyUnits:[],battleResult:null,deployType:'infantry',deployTier:1},
 };
 
 // Init alien garrisons
@@ -447,13 +443,9 @@ function getTotalTroops(ut){const t=state.troops[ut];return(t.t1||0)+(t.t2||0)+(
 function getTotalAllTroops(){return getTotalTroops('infantry')+getTotalTroops('tanks')+getTotalTroops('cavalry');}
 const totalTroops=getTotalAllTroops;
 function deployedTroops(){
-  const lanes=state.invasion.lanes;
+  const units=(state.invasion&&state.invasion.playerUnits)||[];
   const r={infantry:0,tanks:0,cavalry:0};
-  lanes.forEach(l=>{
-    r.infantry+=(l.inf1||0)+(l.inf2||0)+(l.inf3||0);
-    r.tanks+=(l.tnk1||0)+(l.tnk2||0)+(l.tnk3||0);
-    r.cavalry+=(l.cav1||0)+(l.cav2||0)+(l.cav3||0);
-  });
+  units.forEach(u=>{ if(r[u.type]!==undefined) r[u.type]++; });
   return r;
 }
 
@@ -1373,245 +1365,465 @@ setInterval(()=>{
 // ─────────────────────────────────────────────
 //  INVASION SCREEN
 // ─────────────────────────────────────────────
-function openInvasion(contIdx){
-  state.invasion.contIdx=contIdx;
-  state.invasion.phase='deploy';
-  state.invasion.laneResults=null;
-  const emptyLane=()=>({inf1:0,inf2:0,inf3:0,tnk1:0,tnk2:0,tnk3:0,cav1:0,cav2:0,cav3:0});
-  state.invasion.lanes=[emptyLane(),emptyLane(),emptyLane()];
+// ═══ COMBAT V3 ═══
 
-  const cont=state.planet.continents[contIdx];
-  const al=cont.aliens;
-  const rng=mkRng(strSeed(cont.name+'lanes'));
-  const split=(total)=>{
-    const a=Math.floor(total*(.3+rng()*.25)),b=Math.floor(total*(.3+rng()*.2)),c=total-a-b;
-    return[Math.max(0,a),Math.max(0,b),Math.max(0,c)];
+let _battleInterval = null;
+let _battleRaf = null;
+let _unitIdCounter = 0;
+let _hitFlashes = []; // [{x,y,r,alpha,born}]
+
+const BASE_STATS = {
+  infantry: { hp: 30, atk: 8,  spd: 0.003, range: 0.08, cd: 3 },
+  tanks:    { hp: 80, atk: 20, spd: 0.002, range: 0.12, cd: 5 },
+  cavalry:  { hp: 20, atk: 12, spd: 0.005, range: 0.06, cd: 2 },
+};
+
+function _makeUnit(side, type, tier, x, y) {
+  const s = BASE_STATS[type];
+  const m = TIER_MULT[tier - 1];
+  const b = getTroopBonuses();
+  const atkBonus = type === 'infantry' ? (b.infAtk || 1)
+    : type === 'tanks' ? (b.tnkAtk || 1) : (b.cavAtk || 1);
+  const defBonus = type === 'infantry' ? (b.infDef || 1)
+    : type === 'tanks' ? (b.tnkDef || 1) : 1;
+  return {
+    id: ++_unitIdCounter,
+    side, type, tier, x, y,
+    hp: s.hp * m * defBonus,
+    maxHp: s.hp * m * defBonus,
+    atk: s.atk * m * atkBonus,
+    spd: s.spd * (type === 'cavalry' ? (1 + (b.cavEvade || 0) * 0.5) : 1),
+    range: s.range,
+    baseCd: s.cd,
+    cooldown: 0,
+    dead: false,
+    angle: side === 'player' ? -Math.PI / 2 : Math.PI / 2,
+    hitFlash: 0,
   };
-  const [ai1,ai2,ai3]=split(al.infantry);
-  const [at1,at2,at3]=split(al.tanks);
-  const [ac1,ac2,ac3]=split(al.cavalry);
-  state.invasion.alienLanes=[
-    {infantry:ai1,tanks:at1,cavalry:ac1},
-    {infantry:ai2,tanks:at2,cavalry:ac2},
-    {infantry:ai3,tanks:at3,cavalry:ac3},
-  ];
+}
 
-  document.getElementById('inv-title').textContent=`⚔ INVADE ${cont.name.toUpperCase()}`;
-  document.getElementById('inv-back').onclick=()=>openContinent(contIdx);
-  document.getElementById('inv-phase').textContent='DEPLOY';
-  document.getElementById('troop-bar-inv').innerHTML=troopHTML();
+function _genEnemyUnits(aliens) {
+  const rng = mkRng(strSeed(state.planet.continents[state.invasion.contIdx].name + 'v3'));
+  const units = [];
+  const place = (type, tier, count) => {
+    for (let i = 0; i < count; i++) {
+      const x = 0.05 + rng() * 0.90;
+      const y = 0.03 + rng() * 0.35;
+      units.push(_makeUnit('enemy', type, tier, x, y));
+    }
+  };
+  // distribute alien counts across tiers (mostly t1, some t2, fewer t3)
+  const split = (total) => {
+    const t3 = Math.floor(total * 0.10);
+    const t2 = Math.floor(total * 0.25);
+    const t1 = total - t2 - t3;
+    return [Math.max(0, t1), Math.max(0, t2), Math.max(0, t3)];
+  };
+  ['infantry', 'tanks', 'cavalry'].forEach(type => {
+    const [n1, n2, n3] = split(aliens[type] || 0);
+    if (n1) place(type, 1, n1);
+    if (n2) place(type, 2, n2);
+    if (n3) place(type, 3, n3);
+  });
+  return units;
+}
 
-  refreshInvasionMap();
+function openInvasion(contIdx) {
+  if (_battleInterval) { clearInterval(_battleInterval); _battleInterval = null; }
+  if (_battleRaf) { cancelAnimationFrame(_battleRaf); _battleRaf = null; }
+  _hitFlashes = [];
+
+  const cont = state.planet.continents[contIdx];
+  state.invasion = {
+    contIdx,
+    phase: 'deploy',
+    playerUnits: [],
+    enemyUnits: _genEnemyUnits(cont.aliens),
+    battleResult: null,
+    deployType: 'infantry',
+    deployTier: 1,
+  };
+
+  document.getElementById('inv-title').textContent = `⚔ INVADE ${cont.name.toUpperCase()}`;
+  document.getElementById('inv-back').onclick = () => openContinent(contIdx);
+  document.getElementById('inv-phase').textContent = 'DEPLOY';
+  document.getElementById('troop-bar-inv').innerHTML = troopHTML();
+
+  const canvas = document.getElementById('invasion-map');
+  canvas.onclick = _onBattlefieldClick;
+  canvas.style.cursor = 'crosshair';
+
   renderLaneGrid();
-  renderInvBody();
+  _drawBattlefield(canvas, performance.now());
   showScreen('invasion');
 }
 
-function refreshInvasionMap(laneResults){
-  const canvas=document.getElementById('invasion-map');
-  canvas.style.width='100%';
-  drawInvasionMap(canvas,{lanes:state.invasion.alienLanes},state.invasion.phase,
-    laneResults||state.invasion.laneResults||null);
-}
+function renderLaneGrid() {
+  const body = document.getElementById('inv-body');
+  if (!body) return;
+  if (state.invasion.phase === 'battle') { body.innerHTML = ''; return; }
+  if (state.invasion.phase === 'done') return;
 
-function renderLaneGrid(){
-  const grid=document.getElementById('lane-grid');
-  if(state.invasion.phase!=='deploy'){grid.innerHTML='';return;}
+  const inv = state.invasion;
+  const deployed = inv.playerUnits.length;
+  const types = ['infantry', 'tanks', 'cavalry'];
+  const typeLabels = { infantry: 'Infantry', tanks: 'Tanks', cavalry: 'Cavalry' };
 
-  const dep=deployedTroops();
-  const unitDefs=[
-    {label:'Infantry',prefix:'inf',ut:'infantry',icons:TIER_ICONS.infantry,names:TIER_NAMES.infantry},
-    {label:'Tanks',   prefix:'tnk',ut:'tanks',   icons:TIER_ICONS.tanks,   names:TIER_NAMES.tanks},
-    {label:'Cavalry', prefix:'cav',ut:'cavalry', icons:TIER_ICONS.cavalry, names:TIER_NAMES.cavalry},
-  ];
-
-  let html='<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr>';
-  html+='<th style="text-align:left;padding:3px;color:var(--muted);font-size:9px">UNIT</th>';
-  LANE_NAMES.forEach((n,i)=>html+=`<th style="text-align:center;padding:3px;color:${LANE_COLORS[i]};font-size:9px">${n}</th>`);
-  html+='</tr></thead><tbody>';
-
-  unitDefs.forEach(ud=>{
-    html+=`<tr><td colspan="4" style="padding:3px 2px;color:var(--gold);font-weight:900;font-size:10px;border-top:1px solid var(--edge)">${ud.label}</td></tr>`;
-    for(let t=1;t<=3;t++){
-      const field=ud.prefix+t;
-      const avail=state.troops[ud.ut]['t'+t]||0;
-      html+=`<tr><td style="padding:2px 4px;color:var(--muted);font-size:10px">${ud.icons[t-1]} T${t}</td>`;
-      state.invasion.lanes.forEach((lane,li)=>{
-        const val=lane[field]||0;
-        html+=`<td style="text-align:center;padding:2px">
-          <button class="lqb" onclick="adjLane(${li},'${field}',-1)">−</button>
-          <span class="lqv" style="min-width:18px;display:inline-block">${val}</span>
-          <button class="lqb" onclick="adjLane(${li},'${field}',1)">+</button>
-        </td>`;
-      });
-      html+=`<td style="padding:2px;font-size:9px;color:var(--muted)">${avail} avail</td></tr>`;
-    }
-  });
-  html+='</tbody></table>';
-
-  // Alien defenders summary
-  const alienRow=state.invasion.alienLanes.map((al,li)=>{
-    const defPow=(al.infantry+al.tanks*2.2+al.cavalry*1.3).toFixed(0);
-    return`<div class="lane-col ${['left','center','right'][li]}">
-      <div class="lane-label" style="color:${LANE_COLORS[li]}">${LANE_NAMES[li]}</div>
-      <div class="lane-enemy">🔴${al.infantry} ⬛${al.tanks} ⚡${al.cavalry}</div>
-      <div class="lane-strength" style="color:var(--blood)">DEF:${defPow}</div>
-    </div>`;
+  let typeButtons = types.map(t => {
+    const active = inv.deployType === t;
+    const style = active ? 'background:var(--mil);color:#fff;' : 'background:var(--edge);color:var(--muted);';
+    return `<button onclick="selectDeployType('${t}',${inv.deployTier})" style="flex:1;padding:5px 2px;border:1px solid var(--edge);font-size:10px;letter-spacing:1px;cursor:pointer;${style}">${TIER_ICONS[t][0]} ${typeLabels[t].toUpperCase()}</button>`;
   }).join('');
 
-  grid.innerHTML=`<div class="lane-grid" style="padding:0 4px 4px">${alienRow}</div>`+html;
+  let tierButtons = [1, 2, 3].map(tier => {
+    const avail = _availForDeploy(inv.deployType, tier);
+    const active = inv.deployTier === tier;
+    const style = active ? 'background:var(--rust);color:#fff;' : 'background:var(--edge);color:var(--muted);';
+    return `<button onclick="selectDeployType('${inv.deployType}',${tier})" style="flex:1;padding:4px 2px;border:1px solid var(--edge);font-size:10px;cursor:pointer;${style}">${TIER_ICONS[inv.deployType][tier - 1]} T${tier} (${avail})</button>`;
+  }).join('');
+
+  const selAvail = _availForDeploy(inv.deployType, inv.deployTier);
+  const hint = selAvail > 0
+    ? `<div style="font-size:10px;color:var(--mil);margin-top:4px">▶ Click bottom half of map to place ${TIER_NAMES[inv.deployType][inv.deployTier - 1]}</div>`
+    : `<div style="font-size:10px;color:var(--blood);margin-top:4px">✗ No ${TIER_NAMES[inv.deployType][inv.deployTier - 1]} available</div>`;
+
+  const engageStyle = deployed > 0 ? 'background:var(--blood);color:#fff;' : 'background:var(--edge);color:var(--muted);cursor:not-allowed;';
+
+  body.innerHTML = `
+    <div class="panel steel mb8" style="padding:8px">
+      <div style="font-size:9px;letter-spacing:2px;color:var(--muted);margin-bottom:6px">SELECT UNIT TYPE</div>
+      <div style="display:flex;gap:4px;margin-bottom:6px">${typeButtons}</div>
+      <div style="display:flex;gap:4px;margin-bottom:4px">${tierButtons}</div>
+      ${hint}
+      <div style="font-size:10px;color:var(--text);margin-top:6px">Deployed: <span style="color:var(--gold);font-weight:900">${deployed}</span> units</div>
+    </div>
+    <div style="display:flex;gap:6px">
+      <button onclick="engageInvasion()" style="flex:1;padding:8px;border:1px solid var(--edge);font-size:11px;letter-spacing:2px;font-weight:900;${engageStyle}">
+        ⚔ ENGAGE${deployed > 0 ? ' — ' + deployed + ' TROOPS' : ''}
+      </button>
+      ${deployed > 0 ? `<button onclick="_clearDeployedUnits()" style="padding:8px 10px;border:1px solid var(--edge);background:var(--edge);color:var(--muted);font-size:10px;cursor:pointer;">✗ CLEAR</button>` : ''}
+    </div>`;
 }
 
-function adjLane(laneIdx,field,delta){
-  const match=field.match(/^(inf|tnk|cav)(\d)$/);if(!match)return;
-  const prefixMap={inf:'infantry',tnk:'tanks',cav:'cavalry'};
-  const ut=prefixMap[match[1]],tier='t'+match[2];
-  const lane=state.invasion.lanes[laneIdx];
-  const newVal=Math.max(0,(lane[field]||0)+delta);
-  // count all deployed of this ut+tier across all lanes
-  const totalDep=state.invasion.lanes.reduce((a,l)=>a+(l[field]||0),0);
-  const avail=state.troops[ut][tier]||0;
-  if(delta>0&&(totalDep-lane[field]||0)+newVal>avail){toast('// NO MORE '+ut.toUpperCase()+' T'+match[2]+' AVAILABLE //');return;}
-  lane[field]=newVal;
+function _availForDeploy(type, tier) {
+  const key = 't' + tier;
+  const total = state.troops[type][key] || 0;
+  const used = state.invasion.playerUnits.filter(u => u.type === type && u.tier === tier).length;
+  return Math.max(0, total - used);
+}
+
+function _clearDeployedUnits() {
+  state.invasion.playerUnits = [];
   renderLaneGrid();
-  refreshInvasionMap();
+  const canvas = document.getElementById('invasion-map');
+  _drawBattlefield(canvas, performance.now());
 }
 
-function renderInvBody(){
-  const body=document.getElementById('inv-body');
-  if(state.invasion.phase==='deploy'){
-    const dep=deployedTroops();
-    const total=dep.infantry+dep.tanks+dep.cavalry;
-    body.innerHTML=`
-      <div class="panel steel mb8">
-        <div style="font-size:10px;letter-spacing:2px;color:var(--muted);margin-bottom:6px">DEPLOYMENT STATUS</div>
-        <div style="font-size:12px;color:var(--text)">Deploying: <span style="color:var(--gold);font-weight:900">${total} troops</span> across 3 lanes</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Use ± controls above to assign tier units to each assault lane.</div>
-        <div style="margin-top:6px">${getUpkeepSummaryHTML()}</div>
+function selectDeployType(type, tier) {
+  state.invasion.deployType = type;
+  state.invasion.deployTier = tier;
+  renderLaneGrid();
+}
+
+function _onBattlefieldClick(e) {
+  if (state.invasion.phase !== 'deploy') return;
+  const canvas = e.currentTarget;
+  const rect = canvas.getBoundingClientRect();
+  const nx = (e.clientX - rect.left) / rect.width;
+  const ny = (e.clientY - rect.top) / rect.height;
+
+  if (ny < 0.60) {
+    toast('// DEPLOY IN YOUR ZONE (lower half) //');
+    return;
+  }
+
+  const { deployType, deployTier } = state.invasion;
+  if (_availForDeploy(deployType, deployTier) <= 0) {
+    toast('// NO ' + deployType.toUpperCase() + ' T' + deployTier + ' AVAILABLE //');
+    return;
+  }
+
+  state.invasion.playerUnits.push(_makeUnit('player', deployType, deployTier, nx, ny));
+  renderLaneGrid();
+  _drawBattlefield(canvas, performance.now());
+}
+
+function engageInvasion() {
+  if (state.invasion.playerUnits.length === 0) { toast('// DEPLOY TROOPS FIRST //'); return; }
+  _startBattle();
+}
+
+function _startBattle() {
+  state.invasion.phase = 'battle';
+  document.getElementById('inv-phase').textContent = 'BATTLE';
+  document.getElementById('inv-body').innerHTML = '<div style="font-size:10px;color:var(--muted);text-align:center;padding:10px;letter-spacing:2px">// BATTLE IN PROGRESS //</div>';
+  const canvas = document.getElementById('invasion-map');
+  canvas.style.cursor = 'default';
+  canvas.onclick = null;
+
+  _hitFlashes = [];
+  _battleInterval = setInterval(_battleTick, 125);
+
+  const loop = (now) => {
+    if (state.invasion.phase !== 'battle') return;
+    _drawBattlefield(document.getElementById('invasion-map'), now);
+    _battleRaf = requestAnimationFrame(loop);
+  };
+  _battleRaf = requestAnimationFrame(loop);
+}
+
+function _battleTick() {
+  const inv = state.invasion;
+  if (inv.phase !== 'battle') { clearInterval(_battleInterval); _battleInterval = null; return; }
+
+  const players = inv.playerUnits.filter(u => !u.dead);
+  const enemies = inv.enemyUnits.filter(u => !u.dead);
+
+  if (players.length === 0 || enemies.length === 0) {
+    _endBattle(players.length > 0 ? 'victory' : 'defeat');
+    return;
+  }
+
+  const allUnits = [...players, ...enemies];
+
+  allUnits.forEach(u => {
+    if (u.dead) return;
+    const foes = (u.side === 'player' ? enemies : players).filter(f => !f.dead);
+    if (foes.length === 0) return;
+
+    let nearest = null, nearestDist = Infinity;
+    foes.forEach(f => {
+      const dx = f.x - u.x, dy = f.y - u.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < nearestDist) { nearestDist = d; nearest = f; }
+    });
+    if (!nearest) return;
+
+    u.angle = Math.atan2(nearest.y - u.y, nearest.x - u.x);
+
+    if (nearestDist <= u.range) {
+      if (u.cooldown <= 0) {
+        const dmg = u.atk * (0.85 + Math.random() * 0.30);
+        nearest.hp -= dmg;
+        nearest.hitFlash = 8;
+        _hitFlashes.push({ x: nearest.x, y: nearest.y, r: 0.015, alpha: 1.0, born: performance.now() });
+        if (nearest.hp <= 0) nearest.dead = true;
+        u.cooldown = u.baseCd;
+      } else {
+        u.cooldown--;
+      }
+    } else {
+      const dx = nearest.x - u.x, dy = nearest.y - u.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      u.x += (dx / dist) * u.spd;
+      u.y += (dy / dist) * u.spd;
+      u.x = Math.max(0.01, Math.min(0.99, u.x));
+      u.y = Math.max(0.01, Math.min(0.99, u.y));
+      if (u.cooldown > 0) u.cooldown--;
+    }
+  });
+
+  inv.playerUnits = inv.playerUnits.filter(u => !u.dead || u.hitFlash > 0);
+  inv.enemyUnits = inv.enemyUnits.filter(u => !u.dead || u.hitFlash > 0);
+  inv.playerUnits.forEach(u => { if (u.dead && u.hitFlash > 0) u.hitFlash--; });
+  inv.enemyUnits.forEach(u => { if (u.dead && u.hitFlash > 0) u.hitFlash--; });
+
+  const alivePlayers = inv.playerUnits.filter(u => !u.dead).length;
+  const aliveEnemies = inv.enemyUnits.filter(u => !u.dead).length;
+  if (alivePlayers === 0 || aliveEnemies === 0) {
+    setTimeout(() => _endBattle(alivePlayers > 0 ? 'victory' : 'defeat'), 400);
+  }
+}
+
+function _endBattle(result) {
+  clearInterval(_battleInterval); _battleInterval = null;
+  cancelAnimationFrame(_battleRaf); _battleRaf = null;
+  state.invasion.phase = 'done';
+  state.invasion.battleResult = result;
+  document.getElementById('inv-phase').textContent = result === 'victory' ? 'VICTORY' : 'DEFEATED';
+
+  // Apply troop losses — remove dead units from state.troops
+  const killed = { infantry: { t1: 0, t2: 0, t3: 0 }, tanks: { t1: 0, t2: 0, t3: 0 }, cavalry: { t1: 0, t2: 0, t3: 0 } };
+  state.invasion.playerUnits.filter(u => u.dead).forEach(u => killed[u.type]['t' + u.tier]++);
+  ['infantry', 'tanks', 'cavalry'].forEach(type => {
+    [1, 2, 3].forEach(tier => {
+      const key = 't' + tier;
+      state.troops[type][key] = Math.max(0, (state.troops[type][key] || 0) - killed[type][key]);
+    });
+  });
+
+  const canvas = document.getElementById('invasion-map');
+  _drawBattlefield(canvas, performance.now());
+
+  const survPlayers = state.invasion.playerUnits.filter(u => !u.dead).length;
+  const totalDeployed = state.invasion.playerUnits.length;
+  const lost = totalDeployed - survPlayers;
+
+  const body = document.getElementById('inv-body');
+  if (result === 'victory') {
+    body.innerHTML = `
+      <div class="panel mil mb8" style="padding:10px">
+        <div style="font-size:14px;font-weight:900;letter-spacing:2px;color:var(--mil)">✓ VICTORY</div>
+        <div style="font-size:11px;color:var(--text);margin-top:6px">${survPlayers} survivors · ${lost} fallen</div>
       </div>
       <div class="center">
-        <button class="gal-btn ${total>0?'blood':'steel'}" onclick="engageInvasion()">
-          <div class="gal-btn-inner">⚔ ENGAGE — SEND ${total} TROOPS</div>
-        </button>
+        <button class="gal-btn mil" onclick="finalizeVictory(${state.invasion.contIdx})"><div class="gal-btn-inner">✓ Claim Territory</div></button>
       </div>`;
+    toast('// INVASION SUCCESSFUL — TERRITORY SECURED //');
+  } else {
+    body.innerHTML = `
+      <div class="panel blood mb8" style="padding:10px">
+        <div style="font-size:14px;font-weight:900;letter-spacing:2px;color:var(--blood)">✗ DEFEATED</div>
+        <div style="font-size:11px;color:var(--text);margin-top:6px">All ${totalDeployed} troops lost. Regroup and attack again.</div>
+      </div>
+      <div class="center">
+        <button class="gal-btn blood" onclick="openInvasion(${state.invasion.contIdx})"><div class="gal-btn-inner">↺ Regroup &amp; Attack Again</div></button>
+      </div>`;
+    toast('// ASSAULT REPELLED — ALL TROOPS LOST //');
   }
+  document.getElementById('troop-bar-inv').innerHTML = troopHTML();
 }
 
-// ─────────────────────────────────────────────
-//  TIER-AWARE LANE COMBAT
-// ─────────────────────────────────────────────
-function resolveLaneCombat(lane,alienLane){
-  const b=getTroopBonuses();
-  const baseAtk={infantry:10,tanks:25,cavalry:15};
-  const unitDefs=[{ut:'infantry',fields:['inf1','inf2','inf3'],atkB:b.infAtk||1,defB:b.infDef||1},
-                  {ut:'tanks',   fields:['tnk1','tnk2','tnk3'],atkB:b.tnkAtk||1,defB:b.tnkDef||1},
-                  {ut:'cavalry', fields:['cav1','cav2','cav3'],atkB:b.cavAtk||1,defB:b.cavDef||1}];
-  let totalAtk=0;
-  unitDefs.forEach(ud=>{
-    ud.fields.forEach((f,ti)=>{
-      totalAtk+=(lane[f]||0)*baseAtk[ud.ut]*TIER_MULT[ti]*ud.atkB;
-    });
-  });
-  // Type advantage modifiers
-  if(alienLane.cavalry>alienLane.tanks)totalAtk*=1.3; // infantry advantage
-  const alienDef=alienLane.infantry*10+alienLane.tanks*22+alienLane.cavalry*14;
-  const win=totalAtk>=alienDef*0.78;
-  const baseRate=win?0.05+Math.random()*0.15:0.25+Math.random()*0.20;
-  const losses={};
-  unitDefs.forEach(ud=>{
-    ud.fields.forEach((f,ti)=>{
-      const cnt=lane[f]||0;
-      losses[f]=Math.min(cnt,Math.floor(cnt*baseRate*CAS_MULT[ti]/ud.defB));
-    });
-  });
-  return{win,totalAtk:totalAtk.toFixed(0),alienDef:alienDef.toFixed(0),losses};
-}
+function _drawBattlefield(canvas, now) {
+  if (!canvas) return;
+  const W = canvas.width || 360;
+  const H = canvas.height || 420;
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
 
-// ─────────────────────────────────────────────
-//  TROOP BONUSES — multiplicative flat keys
-// ─────────────────────────────────────────────
-function getTroopBonuses(){
-  const b={infAtk:1.0,infDef:1.0,tnkAtk:1.0,tnkDef:1.0,cavAtk:1.0,cavDef:1.0,cavEvade:0};
-  if(!state.troopResearchDone)return b;
-  state.troopResearchDone.forEach(idx=>{
-    const r=TROOP_RESEARCH[idx];if(!r)return;
-    if(r.unit==='infantry'){
-      if(r.stat==='atk')b.infAtk*=(1+r.bonus);
-      if(r.stat==='def')b.infDef*=(1+r.bonus);
-    }
-    if(r.unit==='tanks'){
-      if(r.stat==='atk')b.tnkAtk*=(1+r.bonus);
-      if(r.stat==='def')b.tnkDef*=(1+r.bonus);
-    }
-    if(r.unit==='cavalry'){
-      if(r.stat==='atk')b.cavAtk*=(1+r.bonus);
-      if(r.stat==='def')b.cavDef*=(1+r.bonus);
-      if(r.stat==='evade')b.cavEvade=1-(1-b.cavEvade)*(1-r.bonus);
-    }
-  });
-  return b;
-}
+  // Background
+  ctx.fillStyle = '#0b0d08';
+  ctx.fillRect(0, 0, W, H);
 
-function engageInvasion(){
-  const dep=deployedTroops();
-  if(dep.infantry+dep.tanks+dep.cavalry===0){toast('// DEPLOY TROOPS FIRST //');return;}
-  state.invasion.phase='battle';
-  document.getElementById('inv-phase').textContent='BATTLE';
-  renderLaneGrid();
+  // Zone tints
+  ctx.fillStyle = 'rgba(192,48,16,0.08)';
+  ctx.fillRect(0, 0, W, H * 0.40);
+  ctx.fillStyle = 'rgba(90,138,60,0.08)';
+  ctx.fillRect(0, H * 0.60, W, H * 0.40);
 
-  const laneResults=state.invasion.lanes.map((lane,li)=>Object.assign({lane:li},resolveLaneCombat(lane,state.invasion.alienLanes[li])));
-  state.invasion.laneResults=laneResults;
+  // Grid
+  ctx.strokeStyle = 'rgba(100,100,80,0.12)';
+  ctx.lineWidth = 1;
+  const GRID = 30;
+  for (let x = 0; x < W; x += GRID) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+  for (let y = 0; y < H; y += GRID) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
 
-  // Apply losses to garrison
-  laneResults.forEach(r=>{
-    const lossMap={infantry:(r.losses.inf1||0)+(r.losses.inf2||0)+(r.losses.inf3||0),
-                   tanks:(r.losses.tnk1||0)+(r.losses.tnk2||0)+(r.losses.tnk3||0),
-                   cavalry:(r.losses.cav1||0)+(r.losses.cav2||0)+(r.losses.cav3||0)};
-    ['infantry','tanks','cavalry'].forEach(ut=>{
-      let rem=lossMap[ut];
-      ['t1','t2','t3'].forEach(tk=>{const take=Math.min(state.troops[ut][tk]||0,rem);state.troops[ut][tk]-=take;rem-=take;});
-    });
-  });
+  // Zone labels
+  if (state.invasion.phase === 'deploy') {
+    ctx.fillStyle = 'rgba(192,48,16,0.5)';
+    ctx.font = '9px monospace';
+    ctx.fillText('ENEMY ZONE', 6, 14);
+    ctx.fillStyle = 'rgba(90,138,60,0.5)';
+    ctx.fillText('YOUR ZONE — CLICK TO DEPLOY', 6, H - 6);
 
-  const lanesWon=laneResults.filter(r=>r.win).length;
-  const overallVictory=lanesWon>=2;
-
-  let laneLog='';
-  laneResults.forEach(r=>{
-    const winCls=r.win?'victory':'hit';
-    const lossTotal=Object.values(r.losses).reduce((a,b)=>a+b,0);
-    laneLog+=`<div class="phase" style="margin-top:8px;border-left:2px solid ${r.win?'var(--mil)':'var(--blood)'};padding-left:6px">${LANE_NAMES[r.lane]}</div>
-      <div style="font-size:10px;color:var(--muted)">ATK <span style="color:var(--gold);font-weight:900">${r.totalAtk}</span> vs DEF <span style="color:var(--blood);font-weight:900">${r.alienDef}</span></div>
-      <div class="${winCls}">▶ ${r.win?'LANE CAPTURED':'REPELLED'} — ${lossTotal} casualties</div>`;
-  });
-
-  let researchLines='';
-  if(state.troopResearchDone&&state.troopResearchDone.size>0){
-    const names=[];state.troopResearchDone.forEach(i=>{if(TROOP_RESEARCH[i])names.push(TROOP_RESEARCH[i].icon+' '+TROOP_RESEARCH[i].name);});
-    researchLines=`<div style="margin-top:8px;font-size:10px;color:var(--muted)">ACTIVE BONUSES</div><div style="font-size:10px;color:var(--steel);line-height:1.8">${names.join('<br>')}</div>`;
+    // Dashed neutral line
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = 'rgba(212,168,50,0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, H * 0.60); ctx.lineTo(W, H * 0.60); ctx.stroke();
+    ctx.setLineDash([]);
   }
 
-  const overallBanner=overallVictory
-    ?`<div class="victory" style="font-size:14px;font-weight:900;margin-top:10px;letter-spacing:2px">✓ INVASION SUCCEEDED — ${lanesWon}/3 LANES SECURED</div>`
-    :`<div class="defeat" style="font-size:14px;font-weight:900;margin-top:10px;letter-spacing:2px">✗ ASSAULT REPELLED — ${lanesWon}/3 LANES CAPTURED</div>`;
+  // Hit flash particles
+  _hitFlashes = _hitFlashes.filter(f => (now - f.born) < 300);
+  _hitFlashes.forEach(f => {
+    const age = (now - f.born) / 300;
+    const alpha = (1 - age) * 0.8;
+    const r = (f.r + age * 0.03) * W;
+    ctx.beginPath();
+    ctx.arc(f.x * W, f.y * H, r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,180,50,${alpha})`;
+    ctx.fill();
+  });
 
-  state.invasion.phase='done';
-  document.getElementById('inv-phase').textContent=overallVictory?'VICTORY':'DEFEATED';
-  refreshInvasionMap(laneResults);
-
-  document.getElementById('inv-body').innerHTML=`
-    <div class="panel ${overallVictory?'mil':'blood'} mb8">
-      <div style="font-size:10px;letter-spacing:2px;color:var(--muted);margin-bottom:4px">// BATTLE REPORT //</div>
-      <div class="battle-log">${laneLog}${researchLines}${overallBanner}</div>
-    </div>
-    <div class="center">
-      ${overallVictory
-        ?`<button class="gal-btn mil" onclick="finalizeVictory(${state.invasion.contIdx})"><div class="gal-btn-inner">✓ Claim Territory</div></button>`
-        :`<button class="gal-btn blood" onclick="openInvasion(${state.invasion.contIdx})"><div class="gal-btn-inner">↺ Regroup &amp; Attack Again</div></button>`}
-    </div>`;
-  document.getElementById('troop-bar-inv').innerHTML=troopHTML();
+  // Draw units
+  const allUnits = [...(state.invasion.enemyUnits || []), ...(state.invasion.playerUnits || [])];
+  allUnits.forEach(u => _drawUnit(ctx, u, W, H, now));
 }
 
+function _drawUnit(ctx, u, W, H, now) {
+  const px = u.x * W, py = u.y * H;
+  const SIZE = u.type === 'tanks' ? 9 : u.type === 'cavalry' ? 7 : 6;
+  const isDead = u.dead;
+  const alpha = isDead ? 0.3 : 1.0;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(px, py);
+
+  const flash = (u.hitFlash || 0) > 0;
+
+  if (u.type === 'infantry') {
+    // Circle
+    const color = u.side === 'player' ? (flash ? '#fff' : '#5a8a3c') : (flash ? '#ff8080' : '#c03010');
+    ctx.beginPath();
+    ctx.arc(0, 0, SIZE, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = u.side === 'player' ? '#8acc6a' : '#ff6040';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  } else if (u.type === 'tanks') {
+    // Square
+    const color = u.side === 'player' ? (flash ? '#fff' : '#d4a832') : (flash ? '#ff8080' : '#a02808');
+    ctx.rotate(u.angle);
+    ctx.fillStyle = color;
+    ctx.fillRect(-SIZE, -SIZE, SIZE * 2, SIZE * 2);
+    ctx.strokeStyle = u.side === 'player' ? '#f0cc60' : '#ff4020';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(-SIZE, -SIZE, SIZE * 2, SIZE * 2);
+    // barrel
+    ctx.strokeStyle = u.side === 'player' ? '#f0cc60' : '#ff4020';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(SIZE + 4, 0); ctx.stroke();
+  } else {
+    // Triangle for cavalry
+    const color = u.side === 'player' ? (flash ? '#fff' : '#c87428') : (flash ? '#ff8080' : '#901818');
+    ctx.rotate(u.angle + Math.PI / 2);
+    ctx.beginPath();
+    ctx.moveTo(0, -SIZE);
+    ctx.lineTo(SIZE * 0.8, SIZE * 0.7);
+    ctx.lineTo(-SIZE * 0.8, SIZE * 0.7);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = u.side === 'player' ? '#f0a050' : '#ff5030';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  ctx.restore();
+
+  // HP bar (only if alive)
+  if (!isDead && u.hp < u.maxHp) {
+    const barW = 16, barH = 3;
+    const bx = px - barW / 2, by = py - SIZE - 6;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
+    const pct = Math.max(0, u.hp / u.maxHp);
+    const barColor = pct > 0.5 ? '#5a8a3c' : pct > 0.25 ? '#d4a832' : '#c03010';
+    ctx.fillStyle = barColor;
+    ctx.fillRect(bx, by, barW * pct, barH);
+  }
+
+  // Tier icon (tiny text)
+  if (!isDead) {
+    ctx.save();
+    ctx.font = '8px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText(TIER_ICONS[u.type][u.tier - 1], px, py + SIZE + 7);
+    ctx.restore();
+  }
+
+  if (u.hitFlash > 0) u.hitFlash--;
+}
+
+// Stubs for old functions no longer needed
+function adjLane() {}
+function resolveLaneCombat() { return { win: false, losses: {} }; }
 function finalizeVictory(idx){
   const cont=state.planet.continents[idx];
   cont.conquered=true;cont.bldgs=[];cont.aliens=null;

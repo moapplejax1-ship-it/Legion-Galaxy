@@ -333,6 +333,52 @@ const UNIT_PILL_COLORS={
   cavalry: {bg:'rgba(136,136,204,0.25)',border:'#8888cc',text:'#aaaaee'},
 };
 
+// ─────────────────────────────────────────────
+//  TROOP TIER SYSTEM
+// ─────────────────────────────────────────────
+const TIER_ICONS={infantry:['🪖','⚔️','👑'],tanks:['🚗','🛡️','💀'],cavalry:['🐎','🗡️','🦅']};
+const TIER_NAMES={infantry:['Soldier','Centurion','Praetorian'],tanks:['Scout Tank','Battle Tank','Siege Engine'],cavalry:['Rider','Lancer','Cataphract']};
+const TIER_MULT=[1,2.0,4.5];
+const CAS_MULT=[1,0.7,0.4];
+const UPGRADE_RECIPES={infantry:[{cost:25,gain:5},{cost:20,gain:5}],tanks:[{cost:10,gain:3},{cost:8,gain:2}],cavalry:[{cost:8,gain:3},{cost:6,gain:2}]};
+const TRAIN_COSTS={infantry:{pop:6},tanks:{metal:20,food:10,pop:8},cavalry:{metal:15,food:12,pop:5}};
+const TRAIN_BATCH={infantry:5,tanks:1,cavalry:1};
+const FORTIFICATION_TYPES={DORMANT:{walls:0,turrets:0,trenches:0},GUARDED:{walls:1,turrets:1,trenches:1},FORTIFIED:{walls:2,turrets:2,trenches:2}};
+
+// Construction build times per building type (ms)
+const BUILD_TIMES={colonyCenter:15000,resourceCollector:10000,barracks:12000,farm:8000,house:8000,researchCenter:20000,excellorantFactory:18000,spaceport:45000,storehouse:10000};
+
+function getSquads(unitType,tier){const cnt=state.troops[unitType]['t'+tier]||0;const full=Math.floor(cnt/5);const rem=cnt%5;return{full,partial:rem>0?1:0,partialCount:rem};}
+
+function getSquadDisplayHTML(unitType){
+  let h='';
+  for(let t=1;t<=3;t++){
+    const sq=getSquads(unitType,t);
+    const icon=TIER_ICONS[unitType][t-1],name=TIER_NAMES[unitType][t-1],cnt=state.troops[unitType]['t'+t]||0;
+    let desc='<span style="color:var(--muted)">none</span>';
+    if(sq.full>0||sq.partial>0){
+      const parts=[];
+      if(sq.full>0)parts.push(sq.full+' squad'+(sq.full>1?'s':''));
+      if(sq.partial)parts.push('1 squad ('+sq.partialCount+')');
+      desc=parts.join(' + ')+' <span style="color:var(--muted)">('+cnt+')</span>';
+    }
+    h+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:11px">
+      <span>${icon} T${t} ${name}</span><span>${desc}</span></div>`;
+  }
+  return h;
+}
+
+function upgradeTroops(unitType,fromTier,qty){
+  const rec=UPGRADE_RECIPES[unitType][fromTier-1];
+  const srcKey='t'+fromTier,dstKey='t'+(fromTier+1);
+  const needed=rec.cost*qty;
+  if((state.troops[unitType][srcKey]||0)<needed){toast('// NOT ENOUGH T'+fromTier+' '+unitType.toUpperCase()+' //');return;}
+  state.troops[unitType][srcKey]-=needed;
+  state.troops[unitType][dstKey]=(state.troops[unitType][dstKey]||0)+rec.gain*qty;
+  toast('// UPGRADE COMPLETE //');
+  renderTroopsBody();
+}
+
 // Alien garrison templates
 function genAliens(threat,seed){
   const r=mkRng(seed);
@@ -359,8 +405,8 @@ const RESEARCH=[
 
 const state={
   res:{metal:3500,food:1500,pop:300,research:200,excellorant:20},
-  troops:{infantry:0,tanks:0,cavalry:0},
-  trainQty:{infantry:10,tanks:5,cavalry:5},
+  troops:{infantry:{t1:0,t2:0,t3:0},tanks:{t1:0,t2:0,t3:0},cavalry:{t1:0,t2:0,t3:0}},
+  trainQty:{infantry:5,tanks:3,cavalry:3},
   planet:{
     name:'New Terra',
     continents:[
@@ -384,7 +430,9 @@ const state={
   overdrive:{},
   _uid:0,
   invasion:{contIdx:0,lanes:[
-    {inf:0,tnk:0,cav:0},{inf:0,tnk:0,cav:0},{inf:0,tnk:0,cav:0}
+    {inf1:0,inf2:0,inf3:0,tnk1:0,tnk2:0,tnk3:0,cav1:0,cav2:0,cav3:0},
+    {inf1:0,inf2:0,inf3:0,tnk1:0,tnk2:0,tnk3:0,cav1:0,cav2:0,cav3:0},
+    {inf1:0,inf2:0,inf3:0,tnk1:0,tnk2:0,tnk3:0,cav1:0,cav2:0,cav3:0},
   ],phase:'deploy'},
 };
 
@@ -395,11 +443,19 @@ state.planet.continents.forEach((c,i)=>{
 
 const cc=()=>state.planet.continents.filter(c=>c.conquered).length;
 const spUnlocked=()=>cc()>=3;
-const totalTroops=()=>state.troops.infantry+state.troops.tanks+state.troops.cavalry;
-const deployedTroops=()=>{
-  const l=state.invasion.lanes;
-  return{infantry:l.reduce((a,x)=>a+x.inf,0),tanks:l.reduce((a,x)=>a+x.tnk,0),cavalry:l.reduce((a,x)=>a+x.cav,0)};
-};
+function getTotalTroops(ut){const t=state.troops[ut];return(t.t1||0)+(t.t2||0)+(t.t3||0);}
+function getTotalAllTroops(){return getTotalTroops('infantry')+getTotalTroops('tanks')+getTotalTroops('cavalry');}
+const totalTroops=getTotalAllTroops;
+function deployedTroops(){
+  const lanes=state.invasion.lanes;
+  const r={infantry:0,tanks:0,cavalry:0};
+  lanes.forEach(l=>{
+    r.infantry+=(l.inf1||0)+(l.inf2||0)+(l.inf3||0);
+    r.tanks+=(l.tnk1||0)+(l.tnk2||0)+(l.tnk3||0);
+    r.cavalry+=(l.cav1||0)+(l.cav2||0)+(l.cav3||0);
+  });
+  return r;
+}
 
 // UID helper
 function nextUid(){state._uid=(state._uid||0)+1;return state._uid;}
@@ -420,8 +476,12 @@ setInterval(()=>{
       if(p.res==='excellorant')state.res.excellorant=Math.min(9999,  state.res.excellorant+gain);
     });
   });
+  enforceStorageCaps();
   renderAllResBars();
 },3000);
+
+// Upkeep tick
+setInterval(()=>{applyUpkeep();renderAllResBars();},3000);
 
 // ─────────────────────────────────────────────
 //  STARFIELD
@@ -625,44 +685,103 @@ function canPlace(cont,col,row,type){
   return true;
 }
 
+// ─────────────────────────────────────────────
+//  GRAPHICS V2 — ENHANCED BUILDING RENDERING
+// ─────────────────────────────────────────────
 const _BLDG_STYLE={
-  colonyCenter:      {fill:'rgba(20,40,60,0.85)',  border:'#27a0b0'},
-  resourceCollector: {fill:'rgba(40,25,10,0.85)',  border:'#c87428'},
-  barracks:          {fill:'rgba(25,15,10,0.85)',  border:'#8b3010'},
-  house:             {fill:'rgba(15,30,15,0.85)',  border:'#5a8a3c'},
-  researchCenter:    {fill:'rgba(20,15,40,0.85)',  border:'#7070cc'},
-  excellorantFactory:{fill:'rgba(40,38,10,0.85)',  border:'#d4d040'},
-  spaceport:         {fill:'rgba(10,20,35,0.85)',  border:'#4080c0'},
+  colonyCenter:      {fill:'rgba(20,40,60,0.85)',  fill2:'rgba(5,15,30,0.95)',  border:'#27a0b0'},
+  resourceCollector: {fill:'rgba(40,25,10,0.85)',  fill2:'rgba(20,10,5,0.95)',  border:'#c87428'},
+  barracks:          {fill:'rgba(25,15,10,0.85)',  fill2:'rgba(12,6,4,0.95)',   border:'#8b3010'},
+  house:             {fill:'rgba(15,30,15,0.85)',  fill2:'rgba(5,14,5,0.95)',   border:'#5a8a3c'},
+  researchCenter:    {fill:'rgba(20,15,40,0.85)',  fill2:'rgba(8,5,22,0.95)',   border:'#7070cc'},
+  excellorantFactory:{fill:'rgba(40,38,10,0.85)',  fill2:'rgba(20,18,4,0.95)', border:'#d4d040'},
+  spaceport:         {fill:'rgba(10,20,35,0.85)',  fill2:'rgba(4,8,18,0.95)',   border:'#4080c0'},
+  storehouse:        {fill:'rgba(35,20,10,0.85)',  fill2:'rgba(16,8,4,0.95)',   border:'#8a5c28'},
 };
 
-function drawGridBuilding(ctx,b,cellSize,now){
-  const[fw,fh]=FOOTPRINTS[b.type];
-  const px=b.col*cellSize,py=b.row*cellSize;
-  const pw=fw*cellSize,ph=fh*cellSize;
+function _brighten(hex,frac){
+  let c=hex.replace('#','');if(c.length===3)c=c.split('').map(x=>x+x).join('');
+  const r=parseInt(c.slice(0,2),16),g=parseInt(c.slice(2,4),16),b=parseInt(c.slice(4,6),16);
+  const mix=v=>Math.min(255,Math.round(v+(255-v)*frac));
+  return'rgb('+mix(r)+','+mix(g)+','+mix(b)+')';
+}
+
+function drawBuildingShadow(ctx,px,py,pw,ph){
+  ctx.save();const cx=px+pw/2+4,cy=py+ph+4;
+  const rg=ctx.createRadialGradient(cx,cy,0,cx,cy,pw*0.65);
+  rg.addColorStop(0,'rgba(0,0,0,0.45)');rg.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.globalAlpha=0.30;ctx.fillStyle=rg;ctx.scale(1,0.38);
+  ctx.beginPath();ctx.ellipse(cx,cy/0.38,pw*0.65,ph*0.8,0,0,Math.PI*2);ctx.fill();ctx.restore();
+}
+
+function drawConstructionBuilding(ctx,b,cellSize){
+  const fp=FOOTPRINTS[b.type]||[1,1];
+  const px=b.col*cellSize,py=b.row*cellSize,pw=fp[0]*cellSize,ph=fp[1]*cellSize;
+  const pct=b.constructPct||0;
+  ctx.fillStyle='rgba(20,20,20,0.75)';ctx.fillRect(px,py,pw,ph);
+  // Ghost preview
   const info=BUILDINGS[b.type];
-  const overdriven=state.overdrive[b.uid]&&now<state.overdrive[b.uid];
+  if(info&&info.icon){ctx.save();ctx.globalAlpha=0.3;ctx.font=Math.min(pw,ph)*0.42+'px serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(info.icon,px+pw/2,py+ph/2);ctx.restore();}
+  // Corner posts
+  const postW=4;ctx.fillStyle='#404040';
+  ctx.fillRect(px,py,postW,ph);ctx.fillRect(px+pw-postW,py,postW,ph);
+  ctx.fillRect(px,py,pw,postW);ctx.fillRect(px,py+ph-postW,pw,postW);
+  // X-brace
+  ctx.save();ctx.strokeStyle='#303030';ctx.lineWidth=1.5;ctx.setLineDash([4,3]);
+  ctx.beginPath();ctx.moveTo(px+postW,py+postW);ctx.lineTo(px+pw-postW,py+ph-postW);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(px+pw-postW,py+postW);ctx.lineTo(px+postW,py+ph-postW);ctx.stroke();
+  ctx.setLineDash([]);ctx.restore();
+  // Scaffold planks
+  ctx.fillStyle='#5a5040';ctx.fillRect(px,py+ph*0.33-1.5,pw,3);ctx.fillRect(px,py+ph*0.66-1.5,pw,3);
+  // Progress bar
+  const barH=10,barPad=4,barY=py+ph-barH-barPad;
+  ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(px+barPad,barY,pw-barPad*2,barH);
+  ctx.fillStyle='#28a040';ctx.fillRect(px+barPad,barY,(pw-barPad*2)*Math.max(0,Math.min(1,pct)),barH);
+  ctx.font='bold 8px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillStyle='#fff';ctx.fillText(Math.round(pct*100)+'%',px+pw/2,barY+barH/2);
+  ctx.textBaseline='top';ctx.fillStyle='#ffdd00';ctx.fillText('⚙ BUILDING',px+pw/2,py+2);
+}
 
-  if(b.type==='farm'){
-    drawFarm(ctx,px,py,pw,ph,b.level,overdriven);
-    return;
+function _drawBldgDetail(ctx,type,px,py,pw,ph,bc){
+  switch(type){
+    case'colonyCenter':{const cr=Math.min(pw,ph)*0.22,cx=px+pw/2,cy=py+ph*0.30;ctx.save();ctx.strokeStyle=bc;ctx.lineWidth=1.5;const dg=ctx.createLinearGradient(cx-cr,cy,cx+cr,cy);dg.addColorStop(0,'rgba(39,160,176,0.15)');dg.addColorStop(0.5,'rgba(39,160,176,0.35)');dg.addColorStop(1,'rgba(39,160,176,0.15)');ctx.fillStyle=dg;ctx.beginPath();ctx.arc(cx,cy,cr,Math.PI,0);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();break;}
+    case'resourceCollector':{const p1=px+pw-10,p2=px+pw-6;ctx.save();ctx.strokeStyle=bc;ctx.lineWidth=3;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(p1,py+5);ctx.lineTo(p1,py+ph-5);ctx.stroke();ctx.beginPath();ctx.moveTo(p2,py+5);ctx.lineTo(p2,py+ph-5);ctx.stroke();ctx.restore();break;}
+    case'barracks':{const cx=px+pw/2,cy=py+ph*0.25,cw=pw*0.25,ch=7;ctx.save();ctx.strokeStyle=bc;ctx.lineWidth=2;ctx.lineJoin='round';ctx.beginPath();ctx.moveTo(cx-cw,cy-ch/2);ctx.lineTo(cx,cy+ch/2);ctx.lineTo(cx+cw,cy-ch/2);ctx.stroke();ctx.beginPath();ctx.moveTo(cx-cw*0.6,cy-ch/2-5);ctx.lineTo(cx,cy+ch/2-5);ctx.lineTo(cx+cw*0.6,cy-ch/2-5);ctx.stroke();ctx.restore();break;}
+    case'house':{const rh=Math.min(ph*0.22,14),ry=py+2;ctx.save();ctx.fillStyle=bc;ctx.globalAlpha=0.6;ctx.beginPath();ctx.moveTo(px+pw*0.15,ry+rh);ctx.lineTo(px+pw/2,ry);ctx.lineTo(px+pw*0.85,ry+rh);ctx.closePath();ctx.fill();ctx.globalAlpha=1;ctx.strokeStyle=bc;ctx.lineWidth=1;ctx.stroke();ctx.restore();break;}
+    case'researchCenter':{const ax=px+pw-12,ay=py+12,ar=7;ctx.save();ctx.strokeStyle=bc;ctx.lineWidth=1;ctx.globalAlpha=0.75;for(let i=0;i<3;i++){ctx.save();ctx.translate(ax,ay);ctx.rotate(Math.PI/3*i);ctx.beginPath();ctx.ellipse(0,0,ar,ar*0.38,0,0,Math.PI*2);ctx.stroke();ctx.restore();}ctx.fillStyle=bc;ctx.beginPath();ctx.arc(ax,ay,2,0,Math.PI*2);ctx.fill();ctx.restore();break;}
+    case'excellorantFactory':{ctx.save();ctx.fillStyle=bc;ctx.globalAlpha=0.85;function bolt(bx,by){ctx.beginPath();ctx.moveTo(bx+3,by);ctx.lineTo(bx,by+6);ctx.lineTo(bx+2,by+6);ctx.lineTo(bx-1,by+12);ctx.lineTo(bx+4,by+5);ctx.lineTo(bx+2,by+5);ctx.closePath();ctx.fill();}bolt(px+4,py+3);bolt(px+pw-9,py+3);ctx.restore();break;}
+    case'spaceport':{const padY=py+ph-8,padW=pw*0.55,padH=5,padX=px+(pw-pw*0.55)/2;ctx.save();ctx.fillStyle='rgba(100,120,160,0.6)';ctx.fillRect(padX,padY,padW,padH);ctx.strokeStyle=bc;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(padX+padW*0.2,padY);ctx.lineTo(padX+padW*0.1,padY+padH+3);ctx.stroke();ctx.beginPath();ctx.moveTo(padX+padW*0.8,padY);ctx.lineTo(padX+padW*0.9,padY+padH+3);ctx.stroke();ctx.restore();break;}
+    case'storehouse':{const sx=px+pw*0.55,sw=pw*0.38;ctx.save();ctx.strokeStyle=bc;ctx.lineWidth=1.5;ctx.globalAlpha=0.6;[0.28,0.50,0.72].forEach(f=>{const ly=py+ph*f;ctx.beginPath();ctx.moveTo(sx,ly);ctx.lineTo(sx+sw,ly);ctx.stroke();});ctx.restore();break;}
   }
+}
 
-  const style=_BLDG_STYLE[b.type]||{fill:'rgba(30,30,30,0.85)',border:'#888'};
-  ctx.fillStyle=style.fill;ctx.fillRect(px,py,pw,ph);
-
-  const iconSize=Math.min(pw,ph)*0.4;
-  ctx.font=iconSize+'px serif';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText(info.icon,px+pw/2,py+ph/2-4);
-
-  ctx.font='bold 9px Courier New';ctx.textAlign='center';ctx.textBaseline='bottom';
-  ctx.fillStyle='#d4a832';ctx.fillText('LV'+b.level,px+pw/2,py+ph-3);
-
-  ctx.strokeStyle=style.border;ctx.lineWidth=1.5;ctx.strokeRect(px,py,pw,ph);
-
+function drawGridBuilding(ctx,b,cellSize,now){
+  const fp=FOOTPRINTS[b.type]||[1,1];
+  const px=b.col*cellSize,py=b.row*cellSize,pw=fp[0]*cellSize,ph=fp[1]*cellSize;
+  if(b.constructing){drawConstructionBuilding(ctx,b,cellSize);return;}
+  const overdriven=state.overdrive[b.uid]&&now<state.overdrive[b.uid];
+  if(b.type==='farm'){drawFarm(ctx,px,py,pw,ph,b.level,overdriven);return;}
+  const style=_BLDG_STYLE[b.type]||{fill:'rgba(30,30,30,0.85)',fill2:'rgba(10,10,10,0.95)',border:'#888'};
+  const bc=style.border;
+  drawBuildingShadow(ctx,px,py,pw,ph);
+  ctx.fillStyle='rgba(0,0,0,0.45)';ctx.fillRect(px+pw-3,py+2,3,ph-2);
+  const fg=ctx.createLinearGradient(px,py,px+pw,py+ph);
+  fg.addColorStop(0,style.fill);fg.addColorStop(1,style.fill2);
+  ctx.fillStyle=fg;ctx.fillRect(px+1,py+1,pw-4,ph-3);
+  ctx.fillStyle='rgba(0,0,0,0.55)';ctx.fillRect(px+1,py+1,pw-4,2);
+  ctx.strokeStyle=_brighten(bc,0.35);ctx.lineWidth=1;ctx.strokeRect(px+2,py+2,pw-5,ph-5);
+  ctx.strokeStyle=bc;ctx.lineWidth=1.5;ctx.strokeRect(px,py,pw,ph);
+  const dotC=_brighten(bc,0.2);ctx.fillStyle=dotC;
+  [[px+4,py+4],[px+pw-5,py+4],[px+4,py+ph-5],[px+pw-5,py+ph-5]].forEach(([dx,dy])=>{ctx.beginPath();ctx.arc(dx,dy,3,0,Math.PI*2);ctx.fill();});
+  _drawBldgDetail(ctx,b.type,px,py,pw,ph,bc);
+  const info=BUILDINGS[b.type];
+  if(info&&info.icon){const sz=Math.min(pw,ph)*0.40;ctx.font=sz+'px serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(info.icon,px+pw/2,py+ph/2-4);}
+  const bdg='LV '+b.level;ctx.font='900 9px Courier New';ctx.textAlign='center';ctx.textBaseline='bottom';
+  const bw=ctx.measureText(bdg).width+6;ctx.fillStyle='rgba(0,0,0,0.6)';ctx.fillRect(px+pw/2-bw/2,py+ph-14,bw,12);
+  ctx.fillStyle='#d4a832';ctx.fillText(bdg,px+pw/2,py+ph-3);
   if(overdriven){
-    ctx.save();ctx.shadowColor='rgba(255,220,80,0.85)';ctx.shadowBlur=8;
-    ctx.strokeStyle='rgba(255,220,80,0.85)';ctx.lineWidth=3;
-    ctx.strokeRect(px,py,pw,ph);ctx.restore();
+    ctx.save();ctx.shadowColor='rgba(255,220,80,0.9)';ctx.shadowBlur=12;ctx.strokeStyle='rgba(255,220,80,0.85)';ctx.lineWidth=3;ctx.strokeRect(px+1,py+1,pw-2,ph-2);
+    const pulse=0.5+0.5*Math.sin(now/300);ctx.globalAlpha=pulse*0.5;ctx.strokeStyle='#ffe040';ctx.lineWidth=2;ctx.strokeRect(px-2,py-2,pw+4,ph+4);ctx.restore();
   }
 }
 
@@ -702,6 +821,48 @@ function drawContinentMap(canvas,cont){
   ctx.fillStyle='rgba(200,116,40,0.5)';ctx.fillText(cont.name.toUpperCase(),10,8);
   ctx.strokeStyle=cont.conquered?'rgba(90,138,60,0.3)':'rgba(192,48,16,0.28)';
   ctx.lineWidth=1.5;ctx.strokeRect(0,0,GRID_W,GRID_H);
+}
+
+// ─────────────────────────────────────────────
+//  FORTIFICATION CANVAS HELPERS
+// ─────────────────────────────────────────────
+function drawWall(ctx,x,y,w,h,level){
+  if(level>=2){ctx.fillStyle='#2a2420';ctx.fillRect(x-3,y-4,w+6,h+4);ctx.strokeStyle='#4a3c30';ctx.lineWidth=1;ctx.strokeRect(x-3,y-4,w+6,h+4);}
+  const wg=ctx.createLinearGradient(x,y,x,y+h);wg.addColorStop(0,'#8a7860');wg.addColorStop(0.15,'#6e5e4a');wg.addColorStop(1,'#3a2e22');
+  ctx.fillStyle=wg;ctx.fillRect(x,y,w,h);
+  const mc=Math.max(2,Math.floor(w/12)),mW=Math.floor(w/(mc*2)),mH=6;
+  ctx.fillStyle='#7a6850';for(let i=0;i<mc;i++)ctx.fillRect(x+i*(w/mc),y-mH,mW,mH);
+  ctx.save();ctx.strokeStyle='rgba(20,15,10,0.6)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x+w*0.35,y+h*0.15);ctx.lineTo(x+w*0.42,y+h*0.45);ctx.lineTo(x+w*0.38,y+h*0.8);ctx.stroke();ctx.restore();
+  ctx.strokeStyle='#9a8870';ctx.lineWidth=1.5;ctx.strokeRect(x,y,w,h);
+}
+function drawTurret(ctx,x,y,level){
+  const tw=20,th=24;
+  const tg=ctx.createLinearGradient(x,y,x,y+th);tg.addColorStop(0,'#6a5a48');tg.addColorStop(1,'#2a2018');
+  ctx.fillStyle=tg;ctx.fillRect(x,y,tw,th);ctx.strokeStyle='#8a7860';ctx.lineWidth=1.5;ctx.strokeRect(x,y,tw,th);
+  ctx.fillStyle='#0a0808';ctx.fillRect(x+tw/2-1.5,y+th*0.35,3,8);
+  if(level>=2){ctx.strokeStyle='#c0a070';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x+tw/2,y);ctx.lineTo(x+tw/2,y-14);ctx.stroke();ctx.fillStyle='#c82828';ctx.beginPath();ctx.moveTo(x+tw/2,y-14);ctx.lineTo(x+tw/2+8,y-10);ctx.lineTo(x+tw/2,y-6);ctx.closePath();ctx.fill();}
+}
+function drawTrench(ctx,x,y,w){
+  ctx.fillStyle='rgba(30,18,8,0.80)';ctx.fillRect(x,y,w,8);
+  ctx.strokeStyle='#3a2810';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+w,y);ctx.stroke();
+  ctx.strokeStyle='#1e1008';ctx.beginPath();ctx.moveTo(x,y+8);ctx.lineTo(x+w,y+8);ctx.stroke();
+  const sc=Math.max(2,Math.floor(w/18));ctx.strokeStyle='#5a4020';ctx.lineWidth=1.5;ctx.lineCap='round';
+  for(let i=0;i<sc;i++){const sx=x+(i+0.5)*(w/sc),sy=y+4;ctx.beginPath();ctx.moveTo(sx-4,sy+3);ctx.lineTo(sx,sy-3);ctx.lineTo(sx+4,sy+3);ctx.stroke();}
+}
+function drawFortifications(ctx,laneX,laneW,H,threat){
+  const isFort=threat==='FORTIFIED',isGuard=isFort||threat==='GUARDED';
+  if(!isGuard)return;
+  const wallH=18,tw=20,th=24;
+  if(isGuard){
+    drawWall(ctx,laneX,H*0.55,laneW,wallH,1);
+    drawTurret(ctx,laneX-tw/2,H*0.55-th+wallH,1);drawTurret(ctx,laneX+laneW-tw/2,H*0.55-th+wallH,1);
+    drawTrench(ctx,laneX,H*0.70,laneW);
+  }
+  if(isFort){
+    drawWall(ctx,laneX+laneW*0.1,H*0.35,laneW*0.8,wallH,2);
+    drawTurret(ctx,laneX+laneW*0.1-tw/2,H*0.35-th+wallH,2);drawTurret(ctx,laneX+laneW*0.9-tw/2,H*0.35-th+wallH,2);
+    drawTrench(ctx,laneX,H*0.45,laneW);
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -749,6 +910,7 @@ function drawInvasionMap(canvas,alienLanes,phase,laneResults){
       ctx.fillStyle='rgba(90,138,60,0.07)';ctx.fillRect(dzX,dzY,dzW,dzH);
       ctx.font='700 7px Courier New';ctx.textAlign='left';ctx.textBaseline='top';
       ctx.fillStyle='rgba(90,138,60,0.7)';ctx.fillText('DEPLOY',dzX+2,dzY+2);ctx.restore();
+      drawFortifications(ctx,lx,laneW,H,cont.threat);
       drawUnitCluster(lx,H*0.38,aLane.infantry,'inf');
       drawUnitCluster(lx,H*0.54,aLane.tanks,'tnk');
       drawUnitCluster(lx,H*0.70,aLane.cavalry,'cav');
@@ -783,20 +945,124 @@ function drawInvasionMap(canvas,alienLanes,phase,laneResults){
 // ─────────────────────────────────────────────
 //  RESOURCE / TROOP BARS
 // ─────────────────────────────────────────────
-function fmt(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':''+n}
+function fmt(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':''+Math.floor(n)}
+
+// ─────────────────────────────────────────────
+//  ECONOMY V2 — STORAGE + UPKEEP + RESOURCE INFO
+// ─────────────────────────────────────────────
+function applyStorehouseData(){
+  BUILDINGS.storehouse={name:'Storehouse',short:'STOREHOUSE',icon:'🏪',
+    summary:'Expands resource storage capacity. Each upgrade increases max storage for all resources.',prod:null};
+  COSTS.storehouse={metal:350,food:150};
+  FOOTPRINTS.storehouse=[2,2];
+  if(!SLOT_ORDER.includes('storehouse'))SLOT_ORDER.push('storehouse');
+}
+
+function getStorageCapacity(){
+  const caps={metal:5000,food:3000,pop:2000,research:1000,excellorant:200};
+  const bonus={metal:3000,food:2000,pop:1500,research:800,excellorant:150};
+  state.planet.continents.forEach(cont=>{
+    if(!cont.conquered)return;
+    (cont.bldgs||[]).forEach(b=>{
+      if(b.type==='storehouse'){const lv=b.level||1;Object.keys(bonus).forEach(k=>caps[k]+=bonus[k]*lv);}
+    });
+  });
+  return caps;
+}
+
+function enforceStorageCaps(){
+  const caps=getStorageCapacity();
+  Object.keys(caps).forEach(k=>{if(state.res[k]!==undefined&&state.res[k]>caps[k])state.res[k]=caps[k];});
+}
+
+function getStorageBarHTML(resKey){
+  const caps=getStorageCapacity(),cur=Math.floor(state.res[resKey]||0),cap=caps[resKey]||1;
+  const pct=Math.min(100,Math.round(cur/cap*100));
+  return `<div style="margin-top:4px">
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted)"><span>STORED</span><span style="color:var(--gold)">${cur} / ${cap}</span></div>
+    <div style="background:rgba(255,255,255,0.06);height:4px;margin-top:2px"><div style="background:var(--mil);height:100%;width:${pct}%"></div></div>
+  </div>`;
+}
+
+const _RES_DEFS={
+  metal:{icon:'⛏',name:'Metal Ore',color:'var(--rust)',
+    desc:"Raw mineral extract mined from the planet's crust. The primary construction material for all structures and military hardware.",
+    uses:['Build all structures','Train tanks and cavalry','Research upgrades','Ship construction']},
+  food:{icon:'🌾',name:'Food Supply',color:'var(--mil)',
+    desc:'Agricultural output feeding your population. Shortage triggers desertion.',
+    uses:['Sustain population growth','Train all troop types','Required for most buildings','Upkeep for garrisoned troops']},
+  pop:{icon:'👥',name:'Population',color:'#c8c4b0',
+    desc:'Available colonists for conscription and labor. Grows from Housing Blocks.',
+    uses:['Train infantry soldiers','Consumed by tank crew recruitment','Staffs production facilities','Grows passively from housing']},
+  research:{icon:'⚛',name:'Research Points',color:'#8888cc',
+    desc:'Scientific output driving technological advancement across ship and ground force doctrine.',
+    uses:['Unlock ship technology upgrades','Unlock ground forces research','Advanced military doctrine']},
+  excellorant:{icon:'⚡',name:'Excellorant',color:'#d0d040',
+    desc:'Rare synthesized compound produced by the Excellorant Factory. Supercharges production to triple output.',
+    uses:['Activate Overdrive on production buildings (×3 output for 30s)','Strategic resource — hard to stockpile']},
+};
+
+function showResourceInfo(resKey){
+  const def=_RES_DEFS[resKey];if(!def)return;
+  document.getElementById('modal-title').innerHTML=`<span style="font-size:1.4em;margin-right:8px">${def.icon}</span><span style="color:${def.color}">${def.name}</span>`;
+  document.getElementById('modal-body').innerHTML=`
+    <p style="color:var(--muted);font-size:12px;line-height:1.5;margin:0 0 12px">${def.desc}</p>
+    <div class="sec-label" style="margin-bottom:6px">COMMON USES</div>
+    <ul style="margin:0 0 14px;padding-left:18px;font-size:12px">${def.uses.map(u=>`<li style="margin:3px 0">${u}</li>`).join('')}</ul>
+    ${getStorageBarHTML(resKey)}
+    <p class="small-muted" style="margin-top:8px;font-size:10px">Storage capacity is controlled by your Storehouse level.</p>`;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
 function resHTML(){
-  const r=state.res;
-  return `<div class="res-badge" style="border-color:#3a4228;color:var(--rust)">⛏ ${fmt(r.metal)}</div>
-    <div class="res-badge" style="border-color:#3a4228;color:var(--mil)">🌾 ${fmt(r.food)}</div>
-    <div class="res-badge" style="border-color:#3a4228;color:#c8c4b0">👥 ${fmt(r.pop)}</div>
-    <div class="res-badge" style="border-color:#3a4228;color:#8888cc">⚛ ${fmt(r.research)}</div>
-    <div class="res-badge" style="border-color:#3a4228;color:#d0d040">⚡ ${fmt(r.excellorant)}</div>`;
+  const r=state.res,caps=getStorageCapacity();
+  function badge(key,icon,label){
+    const val=Math.floor(r[key]||0),cap=caps[key]||1,near=val/cap>0.9;
+    return `<div class="res-badge" onclick="showResourceInfo('${key}')" style="cursor:pointer;border-color:#3a4228;color:${near?'var(--warn)':'var(--text)'}">
+      <span style="opacity:0.8">${icon}</span> <span style="font-size:10px;color:var(--muted);letter-spacing:0.5px">${label}</span> <span style="font-weight:900">${fmt(val)}</span>
+    </div>`;
+  }
+  return badge('metal','⛏','METAL')+badge('food','🌾','FOOD')+badge('pop','👥','POP')+badge('research','⚛','RSCH')+badge('excellorant','⚡','EXCLNT');
+}
+
+function calcUpkeep(){
+  let total=0;
+  ['infantry','tanks','cavalry'].forEach(ut=>{const g=state.troops[ut];total+=(g.t1||0)+(g.t2||0)+(g.t3||0);});
+  return{food:total*0.5,total};
+}
+
+function applyUpkeep(){
+  const{food:cost}=calcUpkeep();
+  state.res.food=Math.max(0,state.res.food-cost);
+  if(state.res.food===0&&cost>0){
+    toast('// FOOD SHORTAGE — TROOPS DESERTING //');
+    ['infantry','tanks','cavalry'].forEach(ut=>{['t1','t2','t3'].forEach(tk=>{state.troops[ut][tk]=Math.max(0,Math.floor((state.troops[ut][tk]||0)*0.95));});});
+  }
+}
+
+function getUpkeepSummaryHTML(){
+  const{food:cost,total}=calcUpkeep();
+  const low=(state.res.food||0)<cost*10;
+  return `<span style="font-size:10px;color:var(--muted)">Upkeep: <b style="color:var(--text)">${cost}</b> food/tick · <b style="color:var(--text)">${total}</b> soldiers</span>`
+    +(low?`<span style="color:var(--blood);font-size:10px;margin-left:8px">⚠ LOW FOOD</span>`:'');
+}
+
+function getStorehouseDetailHTML(bldg){
+  const caps=getStorageCapacity(),bonus={metal:3000,food:2000,pop:1500,research:800,excellorant:150};
+  const icons={metal:'⛏',food:'🌾',pop:'👥',research:'⚛',excellorant:'⚡'};
+  const labels={metal:'Metal',food:'Food',pop:'Population',research:'Research',excellorant:'Excellorant'};
+  const rows=Object.keys(caps).map(k=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:11px">
+    <span>${icons[k]} <span style="color:var(--muted)">${labels[k]}</span></span>
+    <span style="color:var(--gold)">${caps[k]}</span>
+    <span style="color:var(--mil)">+${bonus[k]}/lvl</span>
+  </div>`).join('');
+  return `<div class="panel mb12"><div class="sec-label" style="margin-bottom:8px">STORAGE CAPACITIES</div>${rows}
+    <p class="small-muted" style="margin-top:8px;font-size:10px">Upgrade to increase all caps. Each level adds the bonus shown.</p></div>`;
 }
 function troopHTML(){
-  const t=state.troops;
-  return `<div class="troop-badge" style="color:var(--mil)">🪖 ${fmt(t.infantry)}</div>
-    <div class="troop-badge" style="color:var(--rust)">🛡️ ${fmt(t.tanks)}</div>
-    <div class="troop-badge" style="color:#8888cc">🐎 ${fmt(t.cavalry)}</div>`;
+  return `<div class="troop-badge" style="color:var(--mil)">🪖 ${fmt(getTotalTroops('infantry'))}</div>
+    <div class="troop-badge" style="color:var(--rust)">🛡️ ${fmt(getTotalTroops('tanks'))}</div>
+    <div class="troop-badge" style="color:#8888cc">🐎 ${fmt(getTotalTroops('cavalry'))}</div>`;
 }
 function renderAllResBars(){
   ['res-home','res-troops','res-cont'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=resHTML();});
@@ -842,86 +1108,105 @@ function openTroops(fromContIdx){
 }
 
 function renderTroopsBody(){
-  const t=state.troops;
-  const body=document.getElementById('troops-body');
-
-  const totalAtk=(t.infantry*1.0+t.tanks*1.8+t.cavalry*1.5).toFixed(0);
-  body.innerHTML=`
-    <div class="panel gold mb8">
-      <div style="font-size:10px;letter-spacing:2px;color:var(--gold);font-weight:900;margin-bottom:8px">// GARRISON STRENGTH //</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center">
-        <div><div style="font-size:24px">🪖</div>
-          <div style="font-size:16px;font-weight:900;color:var(--mil)">${fmt(t.infantry)}</div>
-          <div style="font-size:9px;color:var(--muted);letter-spacing:1px">INFANTRY</div></div>
-        <div><div style="font-size:24px">🛡️</div>
-          <div style="font-size:16px;font-weight:900;color:var(--rust)">${fmt(t.tanks)}</div>
-          <div style="font-size:9px;color:var(--muted);letter-spacing:1px">TANKS</div></div>
-        <div><div style="font-size:24px">🐎</div>
-          <div style="font-size:16px;font-weight:900;color:#8888cc">${fmt(t.cavalry)}</div>
-          <div style="font-size:9px;color:var(--muted);letter-spacing:1px">CAVALRY</div></div>
-      </div>
-      <div style="font-size:11px;color:var(--muted);margin-top:10px;text-align:center;letter-spacing:1px">
-        TOTAL ATTACK POWER: <span style="color:var(--gold);font-weight:900">${totalAtk}</span>
-      </div>
-    </div>
-    <div class="panel steel mb8" style="font-size:11px;color:var(--muted);line-height:1.6">
-      <span style="color:var(--rust);font-weight:900">TACTICS</span><br>
-      🪖 Infantry beats 🐎 Cavalry &nbsp;·&nbsp; 🐎 Cavalry beats 🛡️ Tanks &nbsp;·&nbsp; 🛡️ Tanks beat 🪖 Infantry
-    </div>
-    <div class="sec-label">Train Troops</div>`;
-
+  const body=document.getElementById('troops-body');if(!body)return;
   const hasBrk=state.planet.continents.some(c=>c.conquered&&c.bldgs.find(b=>b.type==='barracks'));
-  if(!hasBrk){
-    body.innerHTML+=`<div class="panel blood"><div class="small-muted">// NO BARRACKS //</div>
-      <div class="small-muted">Build a Barracks on one of your continents to train troops.</div></div>`;
-    return;
-  }
+  const upkeepHTML=getUpkeepSummaryHTML();
 
-  Object.entries(TROOP_TYPES).forEach(([key,troop])=>{
-    const qty=state.trainQty[key]||10;
-    const totalCost={metal:troop.cost.metal*qty,food:troop.cost.food*qty,pop:troop.cost.pop*qty};
-    const canAfford=state.res.metal>=totalCost.metal&&state.res.food>=totalCost.food&&state.res.pop>=totalCost.pop;
-    body.innerHTML+=`
-      <div class="train-card">
-        <span class="train-icon">${troop.icon}</span>
+  // ── Garrison panel ──
+  let html=`<div class="panel gold mb8">
+    <div style="font-size:10px;letter-spacing:2px;color:var(--gold);font-weight:900;margin-bottom:8px">// GARRISON STRENGTH //</div>
+    ${['infantry','tanks','cavalry'].map(ut=>`
+      <div style="margin-bottom:8px">
+        <div style="font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;color:var(--rust)">${ut.toUpperCase()}</div>
+        ${getSquadDisplayHTML(ut)}
+      </div>`).join('')}
+    <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--edge)">${upkeepHTML}</div>
+  </div>
+  <div class="panel steel mb8" style="font-size:11px;color:var(--muted);line-height:1.6">
+    <span style="color:var(--rust);font-weight:900">TACTICS</span><br>
+    🪖 Infantry beats 🐎 Cavalry &nbsp;·&nbsp; 🐎 Cavalry beats 🛡️ Tanks &nbsp;·&nbsp; 🛡️ Tanks beat 🪖 Infantry
+  </div>`;
+
+  // ── Training ──
+  html+=`<div class="sec-label">Train Troops</div>`;
+  if(!hasBrk){html+=`<div class="panel blood mb8"><div class="small-muted">// NO BARRACKS // Build a Barracks to train troops.</div></div>`;}
+  else{
+    ['infantry','tanks','cavalry'].map(ut=>{
+      const cost=TRAIN_COSTS[ut],batch=TRAIN_BATCH[ut],qty=state.trainQty[ut]||1;
+      const units=qty*batch;
+      let costParts=[];
+      if(cost.pop)costParts.push(`👥${cost.pop*qty}`);
+      if(cost.metal)costParts.push(`⛏${cost.metal*qty}`);
+      if(cost.food)costParts.push(`🌾${cost.food*qty}`);
+      const canAfford=(!cost.pop||state.res.pop>=cost.pop*qty)&&(!cost.metal||state.res.metal>=cost.metal*qty)&&(!cost.food||state.res.food>=cost.food*qty);
+      html+=`<div class="train-card">
+        <span class="train-icon">${TIER_ICONS[ut][0]}</span>
         <div class="train-info">
-          <div class="train-name">${troop.name}</div>
-          <div class="train-role">${troop.role}</div>
-          <div class="train-cost" style="margin-top:4px">
-            Per unit: ⛏${troop.cost.metal} 🌾${troop.cost.food} 👥${troop.cost.pop}
-          </div>
-          <div style="font-size:10px;color:${canAfford?'var(--mil)':'var(--blood)'};margin-top:2px">
-            Train ×${qty}: ⛏${totalCost.metal} 🌾${totalCost.food} 👥${totalCost.pop}
-          </div>
+          <div class="train-name">${TIER_NAMES[ut][0]}</div>
+          <div class="train-role" style="font-size:9px;letter-spacing:1px;text-transform:uppercase">${ut.toUpperCase()}</div>
+          <div class="train-cost">${costParts.join(' ')} → +${units} T1</div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
           <div class="qty-ctrl">
-            <button class="qty-btn" onclick="adjQty('${key}',-5)">−</button>
+            <button class="qty-btn" onclick="state.trainQty['${ut}']=Math.max(1,(state.trainQty['${ut}']||1)-1);renderTroopsBody()">−</button>
             <span class="qty-val">${qty}</span>
-            <button class="qty-btn" onclick="adjQty('${key}',5)">+</button>
+            <button class="qty-btn" onclick="state.trainQty['${ut}']=(state.trainQty['${ut}']||1)+1;renderTroopsBody()">+</button>
           </div>
-          <button class="gal-btn ${canAfford?'mil':'steel'}" onclick="trainTroops('${key}')">
+          <button class="gal-btn ${canAfford?'mil':'steel'}" onclick="trainTroops('${ut}')">
             <div class="gal-btn-inner" style="padding:6px 12px;font-size:10px">TRAIN</div>
           </button>
         </div>
       </div>`;
+    });
+  }
+
+  // ── Upgrades ──
+  html+=`<div class="sec-label" style="margin-top:8px">Upgrade Tiers</div>`;
+  ['infantry','tanks','cavalry'].forEach(ut=>{
+    [1,2].forEach(ft=>{
+      const rec=UPGRADE_RECIPES[ut][ft-1],tt=ft+1;
+      const have=state.troops[ut]['t'+ft]||0;
+      const canDo=Math.floor(have/rec.cost);
+      html+=`<div class="train-card">
+        <span class="train-icon">${TIER_ICONS[ut][ft-1]}→${TIER_ICONS[ut][tt-1]}</span>
+        <div class="train-info">
+          <div class="train-name">${TIER_NAMES[ut][ft-1]} → ${TIER_NAMES[ut][tt-1]}</div>
+          <div class="train-role">${rec.cost} T${ft} → ${rec.gain} T${tt}</div>
+          <div class="train-cost">Have: <span style="color:var(--gold)">${have}</span> · Can upgrade: <span style="color:var(--mil)">${canDo}×</span></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:center">
+          <button class="gal-btn ${canDo>=1?'rust':'steel'}" onclick="upgradeTroops('${ut}',${ft},1)">
+            <div class="gal-btn-inner" style="padding:5px 10px;font-size:9px">×1</div>
+          </button>
+          ${canDo>1?`<button class="gal-btn gold" onclick="upgradeTroops('${ut}',${ft},${canDo})"><div class="gal-btn-inner" style="padding:5px 10px;font-size:9px">ALL ×${canDo}</div></button>`:''}
+        </div>
+      </div>`;
+    });
   });
+
+  body.innerHTML=html;
 }
 
 function adjQty(key,delta){
-  state.trainQty[key]=Math.max(1,Math.min(100,(state.trainQty[key]||10)+delta));
+  state.trainQty[key]=Math.max(1,Math.min(100,(state.trainQty[key]||1)+delta));
   renderTroopsBody();
 }
 
-function trainTroops(key){
-  const troop=TROOP_TYPES[key];
-  const qty=state.trainQty[key]||10;
-  const c={metal:troop.cost.metal*qty,food:troop.cost.food*qty,pop:troop.cost.pop*qty};
-  if(state.res.metal<c.metal||state.res.food<c.food||state.res.pop<c.pop){toast('// INSUFFICIENT RESOURCES //');return;}
-  state.res.metal-=c.metal;state.res.food-=c.food;state.res.pop-=c.pop;
-  state.troops[key]+=qty;
-  toast(`// +${qty} ${troop.name.toUpperCase()} TRAINED //`);
-  document.getElementById('res-troops').innerHTML=resHTML();
+function trainTroops(ut){
+  const hasBrk=state.planet.continents.some(c=>c.conquered&&c.bldgs.find(b=>b.type==='barracks'));
+  if(!hasBrk){toast('// BUILD A BARRACKS FIRST //');return;}
+  const cost=TRAIN_COSTS[ut],batch=TRAIN_BATCH[ut],qty=state.trainQty[ut]||1;
+  const units=qty*batch;
+  const popCost=(cost.pop||0)*qty,metalCost=(cost.metal||0)*qty,foodCost=(cost.food||0)*qty;
+  if(popCost&&state.res.pop<popCost){toast('// NEED '+popCost+' POPULATION //');return;}
+  if(metalCost&&state.res.metal<metalCost){toast('// NEED '+metalCost+' METAL //');return;}
+  if(foodCost&&state.res.food<foodCost){toast('// NEED '+foodCost+' FOOD //');return;}
+  if(popCost)state.res.pop-=popCost;
+  if(metalCost)state.res.metal-=metalCost;
+  if(foodCost)state.res.food-=foodCost;
+  state.troops[ut].t1=(state.troops[ut].t1||0)+units;
+  toast('// +'+units+' '+TIER_NAMES[ut][0].toUpperCase()+' TRAINED //');
+  renderAllResBars();
   renderTroopsBody();
 }
 
@@ -1072,16 +1357,30 @@ function startPlacing(type){
 
 function buildStructure(contIdx,col,row,type){
   const c=COSTS[type];
-  if(state.res.metal<c.metal||state.res.food<c.food){toast('// INSUFFICIENT RESOURCES //');return;}
-  state.res.metal-=c.metal;state.res.food-=c.food;
+  if(state.res.metal<(c.metal||0)||state.res.food<(c.food||0)){toast('// INSUFFICIENT RESOURCES //');return;}
+  if(c.metal)state.res.metal-=c.metal;if(c.food)state.res.food-=c.food;
   const uid=nextUid();
-  state.planet.continents[contIdx].bldgs.push({type,level:1,col,row,uid});
+  const buildTime=BUILD_TIMES[type]||10000;
+  const bldg={type,level:1,col,row,uid,constructing:true,constructPct:0,constructEnd:Date.now()+buildTime};
+  state.planet.continents[contIdx].bldgs.push(bldg);
   state.placing=null;
-  toast(`// ${BUILDINGS[type].short} CONSTRUCTED //`);
-  renderHome();
-  refreshContMap();
-  renderContBody();
+  toast(`// ${BUILDINGS[type].short} CONSTRUCTION STARTED //`);
+  renderHome();refreshContMap();renderContBody();
 }
+
+// Construction progress tick
+setInterval(()=>{
+  const now=Date.now();let changed=false;
+  state.planet.continents.forEach(cont=>{
+    if(!cont.conquered)return;
+    cont.bldgs.forEach(b=>{
+      if(!b.constructing)return;
+      b.constructPct=Math.min(1,(now-(b.constructEnd-(BUILD_TIMES[b.type]||10000)))/(BUILD_TIMES[b.type]||10000));
+      if(b.constructPct>=1){b.constructing=false;b.constructPct=1;toast('// '+BUILDINGS[b.type].short+' COMPLETE //');changed=true;}
+    });
+  });
+  if(changed)refreshContMap();
+},500);
 
 // ─────────────────────────────────────────────
 //  INVASION SCREEN
@@ -1090,7 +1389,8 @@ function openInvasion(contIdx){
   state.invasion.contIdx=contIdx;
   state.invasion.phase='deploy';
   state.invasion.laneResults=null;
-  state.invasion.lanes=[{inf:0,tnk:0,cav:0},{inf:0,tnk:0,cav:0},{inf:0,tnk:0,cav:0}];
+  const emptyLane=()=>({inf1:0,inf2:0,inf3:0,tnk1:0,tnk2:0,tnk3:0,cav1:0,cav2:0,cav3:0});
+  state.invasion.lanes=[emptyLane(),emptyLane(),emptyLane()];
 
   const cont=state.planet.continents[contIdx];
   const al=cont.aliens;
@@ -1128,45 +1428,63 @@ function refreshInvasionMap(laneResults){
 
 function renderLaneGrid(){
   const grid=document.getElementById('lane-grid');
-  const t=state.troops;
   if(state.invasion.phase!=='deploy'){grid.innerHTML='';return;}
 
-  grid.innerHTML=state.invasion.lanes.map((lane,li)=>{
-    const en=state.invasion.alienLanes[li];
-    const attackPow=(lane.inf*1.0+lane.tnk*1.8+lane.cav*1.5).toFixed(0);
-    const defPow=(en.infantry*1.0+en.tanks*2.2+en.cavalry*1.3).toFixed(0);
-    const advColor=attackPow>=defPow?'var(--mil)':'var(--blood)';
-    return `<div class="lane-col ${['left','center','right'][li]}">
+  const dep=deployedTroops();
+  const unitDefs=[
+    {label:'Infantry',prefix:'inf',ut:'infantry',icons:TIER_ICONS.infantry,names:TIER_NAMES.infantry},
+    {label:'Tanks',   prefix:'tnk',ut:'tanks',   icons:TIER_ICONS.tanks,   names:TIER_NAMES.tanks},
+    {label:'Cavalry', prefix:'cav',ut:'cavalry', icons:TIER_ICONS.cavalry, names:TIER_NAMES.cavalry},
+  ];
+
+  let html='<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr>';
+  html+='<th style="text-align:left;padding:3px;color:var(--muted);font-size:9px">UNIT</th>';
+  LANE_NAMES.forEach((n,i)=>html+=`<th style="text-align:center;padding:3px;color:${LANE_COLORS[i]};font-size:9px">${n}</th>`);
+  html+='</tr></thead><tbody>';
+
+  unitDefs.forEach(ud=>{
+    html+=`<tr><td colspan="4" style="padding:3px 2px;color:var(--gold);font-weight:900;font-size:10px;border-top:1px solid var(--edge)">${ud.label}</td></tr>`;
+    for(let t=1;t<=3;t++){
+      const field=ud.prefix+t;
+      const avail=state.troops[ud.ut]['t'+t]||0;
+      html+=`<tr><td style="padding:2px 4px;color:var(--muted);font-size:10px">${ud.icons[t-1]} T${t}</td>`;
+      state.invasion.lanes.forEach((lane,li)=>{
+        const val=lane[field]||0;
+        html+=`<td style="text-align:center;padding:2px">
+          <button class="lqb" onclick="adjLane(${li},'${field}',-1)">−</button>
+          <span class="lqv" style="min-width:18px;display:inline-block">${val}</span>
+          <button class="lqb" onclick="adjLane(${li},'${field}',1)">+</button>
+        </td>`;
+      });
+      html+=`<td style="padding:2px;font-size:9px;color:var(--muted)">${avail} avail</td></tr>`;
+    }
+  });
+  html+='</tbody></table>';
+
+  // Alien defenders summary
+  const alienRow=state.invasion.alienLanes.map((al,li)=>{
+    const defPow=(al.infantry+al.tanks*2.2+al.cavalry*1.3).toFixed(0);
+    return`<div class="lane-col ${['left','center','right'][li]}">
       <div class="lane-label" style="color:${LANE_COLORS[li]}">${LANE_NAMES[li]}</div>
-      <div class="lane-enemy">👾 ${en.infantry} · ⬛${en.tanks} · ⚡${en.cavalry}</div>
-      ${['infantry','tanks','cavalry'].map(ut=>{
-        const utInst={infantry:{icon:'🪖',field:'inf',color:'var(--mil)'},
-          tanks:{icon:'🛡️',field:'tnk',color:'var(--rust)'},
-          cavalry:{icon:'🐎',field:'cav',color:'#8888cc'}}[ut];
-        const val=lane[utInst.field];
-        return `<div class="lane-unit-row">
-          <span class="lane-unit-icon">${utInst.icon}</span>
-          <div class="lane-qty-ctrl">
-            <button class="lqb" onclick="adjLane(${li},'${utInst.field}',-1)">−</button>
-            <span class="lqv" style="color:${utInst.color}">${val}</span>
-            <button class="lqb" onclick="adjLane(${li},'${utInst.field}',1)">+</button>
-          </div>
-        </div>`;
-      }).join('')}
-      <div class="lane-strength" style="color:${advColor}">ATK:${attackPow} DEF:${defPow}</div>
+      <div class="lane-enemy">🔴${al.infantry} ⬛${al.tanks} ⚡${al.cavalry}</div>
+      <div class="lane-strength" style="color:var(--blood)">DEF:${defPow}</div>
     </div>`;
   }).join('');
+
+  grid.innerHTML=`<div class="lane-grid" style="padding:0 4px 4px">${alienRow}</div>`+html;
 }
 
 function adjLane(laneIdx,field,delta){
-  const t=state.troops;
-  const keyMap={inf:'infantry',tnk:'tanks',cav:'cavalry'};
-  const troopKey=keyMap[field];
-  const totalDeployed=state.invasion.lanes.reduce((a,l)=>a+l[field],0);
-  const newVal=state.invasion.lanes[laneIdx][field]+delta;
-  if(newVal<0)return;
-  if(delta>0&&totalDeployed>=t[troopKey]){toast(`// NO MORE ${troopKey.toUpperCase()} AVAILABLE //`);return;}
-  state.invasion.lanes[laneIdx][field]=newVal;
+  const match=field.match(/^(inf|tnk|cav)(\d)$/);if(!match)return;
+  const prefixMap={inf:'infantry',tnk:'tanks',cav:'cavalry'};
+  const ut=prefixMap[match[1]],tier='t'+match[2];
+  const lane=state.invasion.lanes[laneIdx];
+  const newVal=Math.max(0,(lane[field]||0)+delta);
+  // count all deployed of this ut+tier across all lanes
+  const totalDep=state.invasion.lanes.reduce((a,l)=>a+(l[field]||0),0);
+  const avail=state.troops[ut][tier]||0;
+  if(delta>0&&(totalDep-lane[field]||0)+newVal>avail){toast('// NO MORE '+ut.toUpperCase()+' T'+match[2]+' AVAILABLE //');return;}
+  lane[field]=newVal;
   renderLaneGrid();
   refreshInvasionMap();
 }
@@ -1180,7 +1498,8 @@ function renderInvBody(){
       <div class="panel steel mb8">
         <div style="font-size:10px;letter-spacing:2px;color:var(--muted);margin-bottom:6px">DEPLOYMENT STATUS</div>
         <div style="font-size:12px;color:var(--text)">Deploying: <span style="color:var(--gold);font-weight:900">${total} troops</span> across 3 lanes</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:4px">Use ± buttons above to assign troops to each assault lane. Match your unit types against enemy weaknesses.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Use ± controls above to assign tier units to each assault lane.</div>
+        <div style="margin-top:6px">${getUpkeepSummaryHTML()}</div>
       </div>
       <div class="center">
         <button class="gal-btn ${total>0?'blood':'steel'}" onclick="engageInvasion()">
@@ -1188,6 +1507,36 @@ function renderInvBody(){
         </button>
       </div>`;
   }
+}
+
+// ─────────────────────────────────────────────
+//  TIER-AWARE LANE COMBAT
+// ─────────────────────────────────────────────
+function resolveLaneCombat(lane,alienLane){
+  const b=getTroopBonuses();
+  const baseAtk={infantry:10,tanks:25,cavalry:15};
+  const unitDefs=[{ut:'infantry',fields:['inf1','inf2','inf3'],atkB:b.infAtk||1,defB:b.infDef||1},
+                  {ut:'tanks',   fields:['tnk1','tnk2','tnk3'],atkB:b.tnkAtk||1,defB:b.tnkDef||1},
+                  {ut:'cavalry', fields:['cav1','cav2','cav3'],atkB:b.cavAtk||1,defB:b.cavDef||1}];
+  let totalAtk=0;
+  unitDefs.forEach(ud=>{
+    ud.fields.forEach((f,ti)=>{
+      totalAtk+=(lane[f]||0)*baseAtk[ud.ut]*TIER_MULT[ti]*ud.atkB;
+    });
+  });
+  // Type advantage modifiers
+  if(alienLane.cavalry>alienLane.tanks)totalAtk*=1.3; // infantry advantage
+  const alienDef=alienLane.infantry*10+alienLane.tanks*22+alienLane.cavalry*14;
+  const win=totalAtk>=alienDef*0.78;
+  const baseRate=win?0.05+Math.random()*0.15:0.25+Math.random()*0.20;
+  const losses={};
+  unitDefs.forEach(ud=>{
+    ud.fields.forEach((f,ti)=>{
+      const cnt=lane[f]||0;
+      losses[f]=Math.min(cnt,Math.floor(cnt*baseRate*CAS_MULT[ti]/ud.defB));
+    });
+  });
+  return{win,totalAtk:totalAtk.toFixed(0),alienDef:alienDef.toFixed(0),losses};
 }
 
 // ─────────────────────────────────────────────
@@ -1242,17 +1591,19 @@ function engageInvasion(){
   document.getElementById('inv-phase').textContent='BATTLE';
   renderLaneGrid();
 
-  const laneResults=state.invasion.lanes.map((lane,li)=>{
-    const res=resolveLaneCombat(lane,state.invasion.alienLanes[li]);
-    return Object.assign({lane:li},res);
-  });
+  const laneResults=state.invasion.lanes.map((lane,li)=>Object.assign({lane:li},resolveLaneCombat(lane,state.invasion.alienLanes[li])));
   state.invasion.laneResults=laneResults;
 
-  let totalInfLost=0,totalTnkLost=0,totalCavLost=0;
-  laneResults.forEach(r=>{totalInfLost+=r.infLost;totalTnkLost+=r.tnkLost;totalCavLost+=r.cavLost;});
-  state.troops.infantry=Math.max(0,state.troops.infantry-totalInfLost);
-  state.troops.tanks=Math.max(0,state.troops.tanks-totalTnkLost);
-  state.troops.cavalry=Math.max(0,state.troops.cavalry-totalCavLost);
+  // Apply losses to garrison
+  laneResults.forEach(r=>{
+    const lossMap={infantry:(r.losses.inf1||0)+(r.losses.inf2||0)+(r.losses.inf3||0),
+                   tanks:(r.losses.tnk1||0)+(r.losses.tnk2||0)+(r.losses.tnk3||0),
+                   cavalry:(r.losses.cav1||0)+(r.losses.cav2||0)+(r.losses.cav3||0)};
+    ['infantry','tanks','cavalry'].forEach(ut=>{
+      let rem=lossMap[ut];
+      ['t1','t2','t3'].forEach(tk=>{const take=Math.min(state.troops[ut][tk]||0,rem);state.troops[ut][tk]-=take;rem-=take;});
+    });
+  });
 
   const lanesWon=laneResults.filter(r=>r.win).length;
   const overallVictory=lanesWon>=2;
@@ -1260,22 +1611,20 @@ function engageInvasion(){
   let laneLog='';
   laneResults.forEach(r=>{
     const winCls=r.win?'victory':'hit';
+    const lossTotal=Object.values(r.losses).reduce((a,b)=>a+b,0);
     laneLog+=`<div class="phase" style="margin-top:8px;border-left:2px solid ${r.win?'var(--mil)':'var(--blood)'};padding-left:6px">${LANE_NAMES[r.lane]}</div>
-      <div style="font-size:10px;color:var(--muted)">ATK <span style="color:var(--gold);font-weight:900">${r.totalAtk}</span> vs DEF <span style="color:var(--blood);font-weight:900">${r.totalDef}</span></div>
-      <div class="${winCls}">▶ ${r.win?'LANE CAPTURED':'REPELLED'} — 🪖${r.infLost} 🛡️${r.tnkLost} 🐎${r.cavLost}</div>`;
+      <div style="font-size:10px;color:var(--muted)">ATK <span style="color:var(--gold);font-weight:900">${r.totalAtk}</span> vs DEF <span style="color:var(--blood);font-weight:900">${r.alienDef}</span></div>
+      <div class="${winCls}">▶ ${r.win?'LANE CAPTURED':'REPELLED'} — ${lossTotal} casualties</div>`;
   });
 
-  // Active research bonus lines
   let researchLines='';
   if(state.troopResearchDone&&state.troopResearchDone.size>0){
-    const names=[];
-    state.troopResearchDone.forEach(i=>{if(TROOP_RESEARCH[i])names.push(`${TROOP_RESEARCH[i].icon} ${TROOP_RESEARCH[i].name}`);});
-    researchLines=`<div style="margin-top:8px;font-size:10px;color:var(--muted);letter-spacing:1px">ACTIVE BONUSES</div>
-      <div style="font-size:10px;color:var(--steel);line-height:1.8">${names.join('<br>')}</div>`;
+    const names=[];state.troopResearchDone.forEach(i=>{if(TROOP_RESEARCH[i])names.push(TROOP_RESEARCH[i].icon+' '+TROOP_RESEARCH[i].name);});
+    researchLines=`<div style="margin-top:8px;font-size:10px;color:var(--muted)">ACTIVE BONUSES</div><div style="font-size:10px;color:var(--steel);line-height:1.8">${names.join('<br>')}</div>`;
   }
 
   const overallBanner=overallVictory
-    ?`<div class="victory" style="font-size:14px;font-weight:900;margin-top:10px;letter-spacing:2px">✓ VICTORY — ${lanesWon}/3 LANES SECURED</div>`
+    ?`<div class="victory" style="font-size:14px;font-weight:900;margin-top:10px;letter-spacing:2px">✓ INVASION SUCCEEDED — ${lanesWon}/3 LANES SECURED</div>`
     :`<div class="defeat" style="font-size:14px;font-weight:900;margin-top:10px;letter-spacing:2px">✗ ASSAULT REPELLED — ${lanesWon}/3 LANES CAPTURED</div>`;
 
   state.invasion.phase='done';
@@ -1285,16 +1634,13 @@ function engageInvasion(){
   document.getElementById('inv-body').innerHTML=`
     <div class="panel ${overallVictory?'mil':'blood'} mb8">
       <div style="font-size:10px;letter-spacing:2px;color:var(--muted);margin-bottom:4px">// BATTLE REPORT //</div>
-      <div class="battle-log">${laneLog}${researchLines}${overallBanner}
-        <div style="font-size:11px;color:var(--muted);margin-top:6px">TOTAL LOSSES: 🪖${totalInfLost} 🛡️${totalTnkLost} 🐎${totalCavLost}</div>
-      </div>
+      <div class="battle-log">${laneLog}${researchLines}${overallBanner}</div>
     </div>
     <div class="center">
       ${overallVictory
         ?`<button class="gal-btn mil" onclick="finalizeVictory(${state.invasion.contIdx})"><div class="gal-btn-inner">✓ Claim Territory</div></button>`
         :`<button class="gal-btn blood" onclick="openInvasion(${state.invasion.contIdx})"><div class="gal-btn-inner">↺ Regroup &amp; Attack Again</div></button>`}
     </div>`;
-
   document.getElementById('troop-bar-inv').innerHTML=troopHTML();
 }
 
@@ -1348,6 +1694,7 @@ function openBuilding(bldg,contIdx){
         <div><div style="font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:1px">${s.name}</div>
         <div style="font-size:11px;color:var(--muted)">${s.role}</div></div></div>`).join('')}</div>`;
   }
+  if(bldg.type==='storehouse'){rosterHTML=getStorehouseDetailHTML(bldg);}
   if(bldg.type==='researchCenter'){
     const shipRows=RESEARCH.map((r,i)=>{const done=state.researchDone.has(i);
       return`<div class="roster-row" style="align-items:center;gap:10px">
@@ -1556,6 +1903,7 @@ let _tt;
 function toast(msg){const el=document.getElementById('toast');clearTimeout(_tt);el.textContent=msg;el.style.opacity='1';_tt=setTimeout(()=>el.style.opacity='0',2600);}
 
 // ─── INIT ───
+applyStorehouseData();
 renderHome();
 </script>
 </body>

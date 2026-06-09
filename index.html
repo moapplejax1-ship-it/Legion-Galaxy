@@ -404,7 +404,7 @@ const RESEARCH=[
 ];
 
 const state={
-  res:{metal:3500,food:1500,pop:300,research:200,excellorant:20},
+  res:{metal:3500,food:1500,pop:300,research:200,excellorant:20,energy:0,credits:100},
   troops:{infantry:{t1:0,t2:0,t3:0},tanks:{t1:0,t2:0,t3:0},cavalry:{t1:0,t2:0,t3:0}},
   trainQty:{infantry:5,tanks:3,cavalry:3},
   planet:{
@@ -427,6 +427,7 @@ const state={
   selCont:0, selBldg:null, placing:null,
   researchDone:new Set(),
   troopResearchDone:new Set(),
+  techUnlocked:new Set(),
   overdrive:{},
   _uid:0,
   invasion:{contIdx:0,phase:'deploy',playerUnits:[],enemyUnits:[],battleResult:null,deployType:'infantry',deployTier:1},
@@ -453,26 +454,7 @@ function deployedTroops(){
 function nextUid(){state._uid=(state._uid||0)+1;return state._uid;}
 
 // Production tick
-setInterval(()=>{
-  const now=Date.now();
-  state.planet.continents.filter(c=>c.conquered).forEach(cont=>{
-    cont.bldgs.forEach(b=>{
-      const p=BUILDINGS[b.type].prod;if(!p)return;
-      const od=state.overdrive[b.uid];
-      const mult=(od&&now<od)?3:1;
-      const gain=p.base*b.level*mult;
-      if(p.res==='metal')      state.res.metal      =Math.min(999999,state.res.metal      +gain);
-      if(p.res==='food')       state.res.food       =Math.min(999999,state.res.food       +gain);
-      if(p.res==='pop')        state.res.pop        =Math.min(99999, state.res.pop        +gain);
-      if(p.res==='research')   state.res.research   =Math.min(99999, state.res.research   +gain);
-      if(p.res==='excellorant')state.res.excellorant=Math.min(9999,  state.res.excellorant+gain);
-    });
-  });
-  enforceStorageCaps();
-  renderAllResBars();
-},3000);
-
-// Upkeep tick
+setInterval(()=>{patchProductionTick();renderAllResBars();},3000);
 setInterval(()=>{applyUpkeep();renderAllResBars();},3000);
 
 // ─────────────────────────────────────────────
@@ -1006,38 +988,7 @@ function showResourceInfo(resKey){
   document.getElementById('modal-overlay').classList.add('open');
 }
 
-function resHTML(){
-  const r=state.res,caps=getStorageCapacity();
-  function badge(key,icon,label){
-    const val=Math.floor(r[key]||0),cap=caps[key]||1,near=val/cap>0.9;
-    return `<div class="res-badge" onclick="showResourceInfo('${key}')" style="cursor:pointer;border-color:#3a4228;color:${near?'var(--warn)':'var(--text)'}">
-      <span style="opacity:0.8">${icon}</span> <span style="font-size:10px;color:var(--muted);letter-spacing:0.5px">${label}</span> <span style="font-weight:900">${fmt(val)}</span>
-    </div>`;
-  }
-  return badge('metal','⛏','METAL')+badge('food','🌾','FOOD')+badge('pop','👥','POP')+badge('research','⚛','RSCH')+badge('excellorant','⚡','EXCLNT');
-}
-
-function calcUpkeep(){
-  let total=0;
-  ['infantry','tanks','cavalry'].forEach(ut=>{const g=state.troops[ut];total+=(g.t1||0)+(g.t2||0)+(g.t3||0);});
-  return{food:total*0.5,total};
-}
-
-function applyUpkeep(){
-  const{food:cost}=calcUpkeep();
-  state.res.food=Math.max(0,state.res.food-cost);
-  if(state.res.food===0&&cost>0){
-    toast('// FOOD SHORTAGE — TROOPS DESERTING //');
-    ['infantry','tanks','cavalry'].forEach(ut=>{['t1','t2','t3'].forEach(tk=>{state.troops[ut][tk]=Math.max(0,Math.floor((state.troops[ut][tk]||0)*0.95));});});
-  }
-}
-
-function getUpkeepSummaryHTML(){
-  const{food:cost,total}=calcUpkeep();
-  const low=(state.res.food||0)<cost*10;
-  return `<span style="font-size:10px;color:var(--muted)">Upkeep: <b style="color:var(--text)">${cost}</b> food/tick · <b style="color:var(--text)">${total}</b> soldiers</span>`
-    +(low?`<span style="color:var(--blood);font-size:10px;margin-left:8px">⚠ LOW FOOD</span>`:'');
-}
+// resHTML, calcUpkeep, applyUpkeep, getUpkeepSummaryHTML defined in Economy V3 below
 
 function getStorehouseDetailHTML(bldg){
   const caps=getStorageCapacity(),bonus={metal:3000,food:2000,pop:1500,research:800,excellorant:150};
@@ -1875,6 +1826,8 @@ function openBuilding(bldg,contIdx){
         <div style="font-size:11px;color:var(--muted)">${s.role}</div></div></div>`).join('')}</div>`;
   }
   if(bldg.type==='storehouse'){rosterHTML=getStorehouseDetailHTML(bldg);}
+  if(bldg.type==='tradePost'){rosterHTML=getTradePostHTML(bldg);}
+  if(bldg.type==='powerRelay'){rosterHTML=getEnergyStatusHTML();}
   if(bldg.type==='researchCenter'){
     const shipRows=RESEARCH.map((r,i)=>{const done=state.researchDone.has(i);
       return`<div class="roster-row" style="align-items:center;gap:10px">
@@ -2084,6 +2037,8 @@ function toast(msg){const el=document.getElementById('toast');clearTimeout(_tt);
 
 // ─── INIT ───
 applyStorehouseData();
+initEconomyV3();
+applyNewBuildingData();
 renderHome();
 
 // ═══ GLOBE VIEW ═══
@@ -2556,6 +2511,575 @@ window.drawAlienDefensiveFormation=drawAlienDefensiveFormation;
 
 })();
 
+
+// ═══ ECONOMY V3 ═══
+// ─────────────────────────────────────────────
+//  STATE EXTENSIONS — call once at boot
+// ─────────────────────────────────────────────
+function initEconomyV3() {
+  // New resources
+  if (state.res.energy === undefined)  state.res.energy  = 0;
+  if (state.res.credits === undefined) state.res.credits = 100;
+  // Market seed + online building map
+  if (!state._tradeRateSeed) state._tradeRateSeed = Date.now();
+  if (!state._energyOnline)  state._energyOnline  = {};
+  // Research tech unlocks for building gates
+  if (!state.techUnlocked) state.techUnlocked = new Set();
+}
+
+// ─────────────────────────────────────────────
+//  NEW BUILDINGS — injected into globals
+// ─────────────────────────────────────────────
+function applyNewBuildingData() {
+  BUILDINGS.powerRelay = {
+    name:'Power Relay', short:'POWER', icon:'⚡',
+    summary:'Generates energy to power your colony. Without it, production buildings throttle or go offline.',
+    prod:{res:'energy', base:8}
+  };
+  BUILDINGS.tradePost = {
+    name:'Trade Post', short:'TRADE', icon:'💱',
+    summary:'Earns credits from off-world commerce. Use credits to rush builds, buy resources, or bribe enemies.',
+    prod:{res:'credits', base:5}
+  };
+  COSTS.powerRelay = {metal:500, food:150};
+  COSTS.tradePost  = {metal:600, food:200};
+  FOOTPRINTS.powerRelay = [2,1];
+  FOOTPRINTS.tradePost  = [2,2];
+  BUILD_TIMES.powerRelay = 12000;
+  BUILD_TIMES.tradePost  = 14000;
+  if (!SLOT_ORDER.includes('powerRelay')) SLOT_ORDER.push('powerRelay');
+  if (!SLOT_ORDER.includes('tradePost'))  SLOT_ORDER.push('tradePost');
+}
+
+// ─────────────────────────────────────────────
+//  ENERGY SYSTEM
+// ─────────────────────────────────────────────
+
+/** Returns {produced, consumed, deficit, ratio}
+ *  Energy is a flow, not stored — recomputed each tick. */
+function getEnergyBalance() {
+  let produced = 0, consumed = 0;
+  state.planet.continents.filter(c => c.conquered).forEach(cont => {
+    (cont.bldgs || []).forEach(b => {
+      const def = BUILDINGS[b.type];
+      if (!def) return;
+      if (b.type === 'powerRelay') {
+        produced += (def.prod.base + 5 * (b.level - 1)) * b.level;
+      } else if (def.prod) {
+        // Each production building consumes 1 energy per level per tick
+        consumed += b.level;
+      }
+    });
+  });
+  // Advanced troop energy drain
+  ['infantry','tanks','cavalry'].forEach(ut => {
+    consumed += (state.troops[ut].t2 || 0) * 0.5;
+    consumed += (state.troops[ut].t3 || 0) * 1.0;
+  });
+  const deficit = Math.max(0, consumed - produced);
+  const ratio   = consumed > 0 ? Math.min(1, produced / consumed) : 1;
+  return { produced: Math.floor(produced), consumed: Math.floor(consumed), deficit: Math.floor(deficit), ratio };
+}
+
+/** Determines which buildings are online this tick.
+ *  If energy deficit: each production building has 50% chance of going offline.
+ *  Partial deficit (ratio 0.5-1.0): buildings randomly throttle. */
+function applyEnergy() {
+  const { produced, consumed, deficit, ratio } = getEnergyBalance();
+  state.res.energy = produced - consumed; // can be negative — shows the gap
+  if (deficit === 0) {
+    // All online
+    state.planet.continents.filter(c => c.conquered).forEach(cont => {
+      (cont.bldgs || []).forEach(b => { state._energyOnline[b.uid] = true; });
+    });
+    return;
+  }
+  // Partial or full deficit
+  const isFullDeficit = ratio < 0.5;
+  state.planet.continents.filter(c => c.conquered).forEach(cont => {
+    (cont.bldgs || []).forEach(b => {
+      const def = BUILDINGS[b.type];
+      if (!def || !def.prod || b.type === 'powerRelay') {
+        state._energyOnline[b.uid] = true;
+        return;
+      }
+      if (isFullDeficit) {
+        state._energyOnline[b.uid] = Math.random() >= 0.5;
+      } else {
+        // Partial deficit: probability of staying online scales with ratio
+        state._energyOnline[b.uid] = Math.random() < ratio;
+      }
+    });
+  });
+}
+
+// ─────────────────────────────────────────────
+//  PRODUCTION TICK (replaces original setInterval)
+// ─────────────────────────────────────────────
+
+/** energyMultiplier for a building uid */
+function _energyMult(uid) {
+  return state._energyOnline[uid] === false ? 0 : 1;
+}
+
+/** Full production tick — call every 3000ms */
+function patchProductionTick() {
+  const now = Date.now();
+  applyEnergy(); // sets _energyOnline and state.res.energy
+
+  let anyOffline = false;
+
+  state.planet.continents.filter(c => c.conquered).forEach(cont => {
+    (cont.bldgs || []).forEach(b => {
+      // Skip buildings in queue / under construction
+      if (b.buildEnd && b.buildEnd > now) return;
+
+      const def = BUILDINGS[b.type];
+      if (!def || !def.prod) return;
+
+      const p = def.prod;
+      const od = state.overdrive[b.uid];
+      const overMult = (od && now < od) ? 3 : 1;
+
+      // Energy relay produces energy (handled in applyEnergy), but credits/energy still tick here
+      const eMult = _energyMult(b.uid);
+      if (!eMult) { anyOffline = true; }
+
+      // Power relay: energy was handled in applyEnergy — skip double-counting
+      if (p.res === 'energy') return;
+
+      const gain = p.base * b.level * eMult * overMult;
+      if (gain <= 0) return;
+
+      switch (p.res) {
+        case 'metal':       state.res.metal       = Math.min(999999, state.res.metal       + gain); break;
+        case 'food':        state.res.food        = Math.min(999999, state.res.food        + gain); break;
+        case 'research':    state.res.research    = Math.min(99999,  state.res.research    + gain); break;
+        case 'excellorant': state.res.excellorant = Math.min(9999,   state.res.excellorant + gain); break;
+        case 'credits':     state.res.credits     = Math.min(999999, state.res.credits     + gain); break;
+      }
+    });
+  });
+
+  // Pop growth — +1 per tick per Housing Block level if food > pop*2
+  state.planet.continents.filter(c => c.conquered).forEach(cont => {
+    (cont.bldgs || []).forEach(b => {
+      if (b.type !== 'house') return;
+      if ((state.res.food || 0) > (state.res.pop || 0) * 2) {
+        const popGain = b.level;
+        const popCap  = getPopCap();
+        state.res.pop = Math.min(popCap, (state.res.pop || 0) + popGain);
+      }
+    });
+  });
+
+  enforceStorageCaps();
+
+  if (anyOffline) {
+    const eb = getEnergyBalance();
+    if (eb.deficit > 0) toast(`// POWER DEFICIT −${eb.deficit} — BUILDINGS OFFLINE //`);
+  }
+}
+
+/** Total pop cap from all housing blocks */
+function getPopCap() {
+  let cap = 500; // base
+  state.planet.continents.filter(c => c.conquered).forEach(cont => {
+    (cont.bldgs || []).forEach(b => {
+      if (b.type === 'house') cap += 100 * b.level;
+    });
+  });
+  return cap;
+}
+
+// ─────────────────────────────────────────────
+//  UPKEEP (extended)
+// ─────────────────────────────────────────────
+
+function calcUpkeep() {
+  let totalTroops = 0;
+  ['infantry','tanks','cavalry'].forEach(ut => {
+    const g = state.troops[ut];
+    totalTroops += (g.t1||0) + (g.t2||0) + (g.t3||0);
+  });
+  // T2 and T3 energy drain (accounted per-troop)
+  let energyDrain = 0;
+  ['infantry','tanks','cavalry'].forEach(ut => {
+    energyDrain += (state.troops[ut].t2 || 0) * 0.5;
+    energyDrain += (state.troops[ut].t3 || 0) * 1.0;
+  });
+  return {
+    food:   totalTroops * 0.3,
+    energy: energyDrain,
+    total:  totalTroops
+  };
+}
+
+function applyUpkeep() {
+  const { food: foodCost } = calcUpkeep();
+  state.res.food = Math.max(0, state.res.food - foodCost);
+  if (state.res.food === 0 && foodCost > 0) {
+    toast('// FOOD SHORTAGE — TROOPS DESERTING //');
+    ['infantry','tanks','cavalry'].forEach(ut => {
+      ['t1','t2','t3'].forEach(tk => {
+        state.troops[ut][tk] = Math.max(0, Math.floor((state.troops[ut][tk] || 0) * 0.95));
+      });
+    });
+  }
+}
+
+// ─────────────────────────────────────────────
+//  RESOURCE BAR (replaces resHTML)
+// ─────────────────────────────────────────────
+
+function resHTML() {
+  const r    = state.res;
+  const caps = getStorageCapacity();
+  const eb   = getEnergyBalance();
+
+  function badge(key, icon, label, overrideVal, color, noCap) {
+    const val  = overrideVal !== undefined ? overrideVal : Math.floor(r[key] || 0);
+    const cap  = caps[key] || 1;
+    const near = !noCap && (val / cap > 0.9);
+    const col  = color || (near ? 'var(--warn)' : 'var(--text)');
+    const clickFn = (!noCap && _RES_DEFS && _RES_DEFS[key]) ? `onclick="showResourceInfo('${key}')" style="cursor:pointer"` : '';
+    return `<div class="res-badge" ${clickFn} style="border-color:#3a4228;color:${col}">
+      <span style="opacity:0.8">${icon}</span>
+      <span style="font-size:10px;color:var(--muted);letter-spacing:0.5px">${label}</span>
+      <span style="font-weight:900">${fmt(val)}</span>
+    </div>`;
+  }
+
+  // Energy badge: color shows health
+  const energyVal = eb.produced - eb.consumed;
+  const energyColor = eb.deficit > 0 ? 'var(--blood)' : (eb.deficit === 0 && eb.produced === 0 ? 'var(--muted)' : 'var(--gold)');
+  const energyLabel = eb.deficit > 0 ? `PWR −${eb.deficit}` : `PWR +${energyVal}`;
+
+  return badge('metal',   '⛏', 'METAL')
+       + badge('food',    '🌾', 'FOOD')
+       + badge('pop',     '👥', 'POP')
+       + badge('research','⚛', 'RSCH')
+       + badge('excellorant','💠','EXCLNT')
+       + `<div class="res-badge" style="border-color:${eb.deficit>0?'var(--blood)':'#3a4228'};color:${energyColor}">
+           <span style="opacity:0.8">⚡</span>
+           <span style="font-size:10px;color:var(--muted);letter-spacing:0.5px">${energyLabel}</span>
+         </div>`
+       + badge('credits', '💰', 'CR', undefined, 'var(--gold)', true);
+}
+
+// ─────────────────────────────────────────────
+//  TRADE MARKET
+// ─────────────────────────────────────────────
+
+const TRADE_PAIRS = [
+  { from:'metal',       to:'food',      baseRate:0.8,  label:'Metal → Food'      },
+  { from:'metal',       to:'credits',   baseRate:0.05, label:'Metal → Credits'   },
+  { from:'food',        to:'credits',   baseRate:0.06, label:'Food → Credits'    },
+  { from:'research',    to:'credits',   baseRate:0.15, label:'Research → Credits'},
+  { from:'excellorant', to:'credits',   baseRate:2.5,  label:'Excellorant → Cr.' },
+];
+
+/** Seeded pseudo-noise for smooth fluctuation ±20% over time */
+function _tradeNoise(pairIdx, now) {
+  const period = 60000;
+  const seed   = (state._tradeRateSeed + pairIdx * 137) % 1000000;
+  const t      = (now % period) / period; // 0..1 within window
+  // Smooth sine wave with seeded phase
+  const phase  = (seed / 1000000) * Math.PI * 2;
+  return 1 + 0.2 * Math.sin(t * Math.PI * 2 + phase);
+}
+
+/** Returns array of {from, to, label, rate, rateDisplay} */
+function getTradeRates(now) {
+  const ts = now || Date.now();
+  return TRADE_PAIRS.map((p, i) => {
+    const rate = p.baseRate * _tradeNoise(i, ts);
+    return {
+      from:        p.from,
+      to:          p.to,
+      label:       p.label,
+      rate,
+      rateDisplay: rate >= 1 ? rate.toFixed(2) : rate.toFixed(3),
+    };
+  });
+}
+
+/** Execute a trade: spend `amount` of `from`, receive amount*rate of `to` */
+function executeTrade(from, to, amount) {
+  if (!amount || amount <= 0) { toast('// INVALID AMOUNT //'); return false; }
+  const now   = Date.now();
+  const rates = getTradeRates(now);
+  const pair  = rates.find(p => p.from === from && p.to === to);
+  if (!pair) { toast('// NO SUCH TRADE PAIR //'); return false; }
+
+  const have = Math.floor(state.res[from] || 0);
+  if (have < amount) { toast(`// NEED ${amount} ${from.toUpperCase()} //`); return false; }
+
+  const receive = Math.floor(amount * pair.rate);
+  state.res[from]  = have - amount;
+  state.res[to]    = Math.min(999999, (state.res[to] || 0) + receive);
+  enforceStorageCaps();
+  toast(`// TRADED ${amount} ${from.toUpperCase()} → ${receive} ${to.toUpperCase()} //`);
+  renderAllResBars();
+  return true;
+}
+
+// ─────────────────────────────────────────────
+//  CREDITS ACTIONS
+// ─────────────────────────────────────────────
+
+const RUSH_COST   = 50;
+const BRIBE_BASE  = 200;
+
+/** Rush a building under construction. Deducts RUSH_COST credits, sets buildEnd to now. */
+function rushConstruction(contIdx, bldgUid, cost) {
+  const c    = cost || RUSH_COST;
+  const cont = state.planet.continents[contIdx];
+  if (!cont) { toast('// INVALID CONTINENT //'); return false; }
+  const bldg = (cont.bldgs || []).find(b => b.uid === bldgUid);
+  if (!bldg) { toast('// BUILDING NOT FOUND //'); return false; }
+  if (!bldg.buildEnd || bldg.buildEnd <= Date.now()) { toast('// NOT UNDER CONSTRUCTION //'); return false; }
+  if ((state.res.credits || 0) < c) { toast(`// NEED ${c} CREDITS //`); return false; }
+  state.res.credits -= c;
+  bldg.buildEnd = Date.now() - 1; // complete immediately
+  toast(`// CONSTRUCTION RUSHED — ${c} CREDITS SPENT //`);
+  renderAllResBars();
+  return true;
+}
+
+/** Returns {cost, reduction, canAfford} for bribing a continent's garrison */
+function getBribeOption(contIdx) {
+  const cont = state.planet.continents[contIdx];
+  if (!cont || cont.conquered || !cont.aliens) return null;
+  const alienCount = _countAliens(cont.aliens);
+  const cost       = BRIBE_BASE + Math.floor(alienCount / 10) * 50;
+  const reduction  = Math.floor(alienCount * 0.2);
+  return { cost, reduction, canAfford: (state.res.credits || 0) >= cost, alienCount };
+}
+
+function _countAliens(aliens) {
+  if (!aliens) return 0;
+  let n = 0;
+  if (typeof aliens === 'object') {
+    Object.values(aliens).forEach(v => { if (typeof v === 'number') n += v; });
+  }
+  return n || (aliens.count || 0);
+}
+
+/** Spend credits to reduce alien garrison by 20% */
+function bribeGarrison(contIdx) {
+  const opt = getBribeOption(contIdx);
+  if (!opt) { toast('// NO TARGET FOR BRIBE //'); return false; }
+  if (!opt.canAfford) { toast(`// NEED ${opt.cost} CREDITS TO BRIBE //`); return false; }
+  state.res.credits -= opt.cost;
+  const cont = state.planet.continents[contIdx];
+  // Reduce alien counts by 20%
+  if (typeof cont.aliens === 'object') {
+    Object.keys(cont.aliens).forEach(k => {
+      if (typeof cont.aliens[k] === 'number') {
+        cont.aliens[k] = Math.max(0, Math.floor(cont.aliens[k] * 0.8));
+      }
+    });
+    if (cont.aliens.count) cont.aliens.count = Math.max(0, Math.floor(cont.aliens.count * 0.8));
+  }
+  toast(`// BRIBED — GARRISON WEAKENED BY 20% (−${opt.cost} CR) //`);
+  renderAllResBars();
+  return true;
+}
+
+// ─────────────────────────────────────────────
+//  RESEARCH PREREQUISITES FOR BUILDING UPGRADES
+// ─────────────────────────────────────────────
+
+const BLDG_RESEARCH = [
+  { id:'advConstruction', name:'Advanced Construction', icon:'🏗️',
+    desc:'Unlocks level 2 upgrades for all structures.',
+    cost:150, unlocks:'level2' },
+  { id:'megaStructures',  name:'Mega-Structures',       icon:'🏙️',
+    desc:'Unlocks level 3 upgrades for all structures.',
+    cost:400, unlocks:'level3', requires:'advConstruction' },
+];
+
+/** Returns null if upgrade allowed, or a string reason if blocked */
+function checkBuildingUpgradeGate(currentLevel) {
+  if (currentLevel >= 2 && !state.techUnlocked.has('advConstruction')) {
+    return 'Requires Advanced Construction research (150 research pts)';
+  }
+  if (currentLevel >= 3 && !state.techUnlocked.has('megaStructures')) {
+    return 'Requires Mega-Structures research (400 research pts)';
+  }
+  return null;
+}
+
+function researchBuildingTech(id) {
+  const tech = BLDG_RESEARCH.find(t => t.id === id);
+  if (!tech) { toast('// UNKNOWN TECH //'); return false; }
+  if (state.techUnlocked.has(id)) { toast('// ALREADY RESEARCHED //'); return false; }
+  if (tech.requires && !state.techUnlocked.has(tech.requires)) {
+    toast(`// REQUIRES ${tech.requires} FIRST //`); return false;
+  }
+  if ((state.res.research || 0) < tech.cost) {
+    toast(`// NEED ${tech.cost} RESEARCH PTS //`); return false;
+  }
+  state.res.research -= tech.cost;
+  state.techUnlocked.add(id);
+  toast(`// RESEARCHED: ${tech.name.toUpperCase()} //`);
+  renderAllResBars();
+  return true;
+}
+
+// ─────────────────────────────────────────────
+//  TRADE POST DETAIL PANEL HTML
+// ─────────────────────────────────────────────
+
+function getTradePostHTML(bldg) {
+  const now      = Date.now();
+  const rates    = getTradeRates(now);
+  const credits  = Math.floor(state.res.credits || 0);
+  const bribeIdx = state.selCont;
+  const bribeOpt = getBribeOption(bribeIdx);
+
+  // Next rate refresh countdown
+  const period    = 60000;
+  const nextTick  = period - (now % period);
+  const nextSec   = Math.ceil(nextTick / 1000);
+
+  // Trade pair rows
+  const increments = [100, 500, 1000];
+  const pairRows   = rates.map(p => {
+    const fromIcon = {metal:'⛏',food:'🌾',research:'⚛',excellorant:'💠',credits:'💰'}[p.from] || '?';
+    const toIcon   = {metal:'⛏',food:'🌾',research:'⚛',excellorant:'💠',credits:'💰'}[p.to]   || '?';
+    const btns     = increments.map(amt => {
+      const have    = Math.floor(state.res[p.from] || 0);
+      const canDo   = have >= amt;
+      const receive = Math.floor(amt * p.rate);
+      return `<button onclick="executeTrade('${p.from}','${p.to}',${amt});closeModal?closeModal():null;renderBldgDetail?renderBldgDetail():null;"
+        style="background:rgba(212,168,50,0.12);border:1px solid ${canDo?'var(--gold)':'var(--edge)'};color:${canDo?'var(--gold)':'var(--muted)'};
+        font-family:inherit;font-size:9px;padding:3px 6px;cursor:${canDo?'pointer':'default'};margin:2px">
+        ${amt}→${receive}
+      </button>`;
+    }).join('');
+    return `<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span style="font-size:11px;font-weight:700">${fromIcon}${p.from.toUpperCase()} → ${toIcon}${p.to.toUpperCase()}</span>
+        <span style="font-size:10px;color:var(--gold)">rate: <b>${p.rateDisplay}</b></span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:2px">${btns}</div>
+    </div>`;
+  }).join('');
+
+  // Bribe section
+  let bribeSection = '';
+  if (bribeOpt) {
+    const btnStyle = bribeOpt.canAfford
+      ? 'background:rgba(192,48,16,0.25);border:1px solid var(--blood);color:var(--blood);cursor:pointer'
+      : 'background:rgba(50,50,50,0.25);border:1px solid var(--muted);color:var(--muted);cursor:default';
+    bribeSection = `
+      <div style="margin-top:12px;padding:10px;background:rgba(192,48,16,0.08);border:1px solid rgba(192,48,16,0.3)">
+        <div style="font-size:11px;font-weight:700;color:var(--blood);margin-bottom:6px">💀 BRIBE GARRISON</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px">
+          ${state.planet.continents[bribeIdx]?.name || '?'} · ${bribeOpt.alienCount} aliens · Reduce by ${bribeOpt.reduction} (20%)
+        </div>
+        <button onclick="bribeGarrison(${bribeIdx});renderAllResBars();"
+          style="${btnStyle};font-family:inherit;font-size:11px;font-weight:700;padding:6px 14px;letter-spacing:1px">
+          BRIBE — ${bribeOpt.cost} CR
+        </button>
+      </div>`;
+  }
+
+  // Rush build section: find any in-construction building
+  const rushRows = [];
+  state.planet.continents.filter(c => c.conquered).forEach((cont, ci) => {
+    (cont.bldgs || []).forEach(b => {
+      if (b.buildEnd && b.buildEnd > now) {
+        const remaining = Math.ceil((b.buildEnd - now) / 1000);
+        const def       = BUILDINGS[b.type];
+        const canRush   = credits >= RUSH_COST;
+        rushRows.push(`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:11px;border-bottom:1px solid rgba(255,255,255,0.04)">
+          <span>${def?.icon || '?'} ${def?.name || b.type} · ${remaining}s left</span>
+          <button onclick="rushConstruction(${ci},${b.uid},${RUSH_COST});renderAllResBars();"
+            style="background:rgba(212,168,50,0.15);border:1px solid ${canRush?'var(--gold)':'var(--edge)'};color:${canRush?'var(--gold)':'var(--muted)'};
+            font-family:inherit;font-size:9px;padding:3px 8px;cursor:${canRush?'pointer':'default'}">
+            RUSH ${RUSH_COST}CR
+          </button>
+        </div>`);
+      }
+    });
+  });
+
+  return `
+    <div class="panel gold" style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div class="sec-label">SPOT MARKET</div>
+        <span style="font-size:10px;color:var(--muted)">rates refresh in <b style="color:var(--gold)">${nextSec}s</b></span>
+      </div>
+      <div style="font-size:12px;margin-bottom:6px">💰 Credits: <b style="color:var(--gold)">${fmt(credits)}</b></div>
+      ${pairRows}
+      ${bribeSection}
+    </div>
+    ${rushRows.length ? `<div class="panel steel">
+      <div class="sec-label" style="margin-bottom:8px">RUSH CONSTRUCTION</div>
+      ${rushRows.join('')}
+    </div>` : ''}
+    <div class="panel" style="margin-bottom:10px">
+      <div class="sec-label" style="margin-bottom:8px">BUILDING RESEARCH GATES</div>
+      ${BLDG_RESEARCH.map(t => {
+        const done  = state.techUnlocked.has(t.id);
+        const reqOk = !t.requires || state.techUnlocked.has(t.requires);
+        const canBuy = !done && reqOk && (state.res.research || 0) >= t.cost;
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
+          <div>
+            <div style="font-size:11px;font-weight:700">${t.icon} ${t.name}</div>
+            <div style="font-size:10px;color:var(--muted)">${t.desc}</div>
+          </div>
+          ${done
+            ? `<span style="color:var(--mil);font-size:10px;font-weight:700">✓ DONE</span>`
+            : `<button onclick="researchBuildingTech('${t.id}');renderAllResBars();"
+                style="background:rgba(136,136,204,0.15);border:1px solid ${canBuy?'#8888cc':'var(--edge)'};color:${canBuy?'#aaaaee':'var(--muted)'};
+                font-family:inherit;font-size:9px;padding:4px 8px;cursor:${canBuy?'pointer':'default'}">
+                ${t.cost} RSCH
+              </button>`
+          }
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
+//  ENERGY SUMMARY HTML  (use in building/continent panels)
+// ─────────────────────────────────────────────
+
+function getEnergyStatusHTML() {
+  const { produced, consumed, deficit } = getEnergyBalance();
+  const color = deficit > 0 ? 'var(--blood)' : 'var(--gold)';
+  const icon  = deficit > 0 ? '🔴' : '🟢';
+  return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:11px">
+    <span>${icon}</span>
+    <span>⚡ ENERGY: <b style="color:var(--gold)">${produced}</b> produced,
+    <b style="color:var(--muted)">${consumed}</b> consumed</span>
+    ${deficit > 0
+      ? `<span style="color:var(--blood);font-weight:700">DEFICIT −${deficit} ⚠</span>`
+      : `<span style="color:var(--mil);font-weight:700">SURPLUS +${produced-consumed}</span>`
+    }
+  </div>`;
+}
+
+// ─────────────────────────────────────────────
+//  UPKEEP SUMMARY (extended for UI)
+// ─────────────────────────────────────────────
+
+function getUpkeepSummaryHTML() {
+  const { food: cost, energy: eDrain, total } = calcUpkeep();
+  const { deficit } = getEnergyBalance();
+  const low = (state.res.food || 0) < cost * 10;
+  return `<span style="font-size:10px;color:var(--muted)">
+    Upkeep: <b style="color:var(--text)">${cost.toFixed(1)}</b> food/tick ·
+    <b style="color:var(--text)">${eDrain.toFixed(1)}</b> energy/tick ·
+    <b style="color:var(--text)">${total}</b> soldiers
+  </span>`
+  + (low ? `<span style="color:var(--blood);font-size:10px;margin-left:8px">⚠ LOW FOOD</span>` : '')
+  + (deficit > 0 ? `<span style="color:var(--blood);font-size:10px;margin-left:8px">⚡ POWER CRITICAL</span>` : '');
+}
 </script>
 </body>
 </html>

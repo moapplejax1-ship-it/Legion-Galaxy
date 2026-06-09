@@ -5,166 +5,222 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Legion Galaxy</title>
 <style>
-  :root {
-    --space: #0a0e1a;
-    --slate: rgba(25,33,51,0.88);
-    --cyan: #27e0f0;
-    --amber: #f0a427;
-    --magenta: #c752f2;
-    --green: #44e87a;
-    --text: #e8eaf6;
-    --muted: rgba(232,234,246,0.55);
-    --border-r: 10px;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: var(--space); font-family: 'Segoe UI', system-ui, sans-serif; color: var(--text); }
+:root {
+  --bg:        #0b0d08;
+  --terrain:   #161a0e;
+  --plate:     #1c2014;
+  --plate2:    #242b18;
+  --edge:      #3a4228;
+  --rust:      #c87428;
+  --mil:       #5a8a3c;
+  --blood:     #c03010;
+  --steel:     #7a8470;
+  --text:      #c8c4b0;
+  --muted:     #6a6858;
+  --warn:      #d44400;
+  --conquered: #4a7a2c;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);font-family:'Courier New',monospace;color:var(--text)}
 
-  #starfield { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+/* scanline overlay */
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.07) 2px,rgba(0,0,0,0.07) 4px)}
 
-  #app { position: relative; z-index: 1; width: 100%; height: 100%; overflow: hidden; display: flex; flex-direction: column; max-width: 520px; margin: 0 auto; }
+#starfield{position:fixed;inset:0;z-index:0;pointer-events:none}
+#app{position:relative;z-index:1;width:100%;height:100%;overflow:hidden;display:flex;flex-direction:column;max-width:540px;margin:0 auto}
 
-  /* ── Screens ── */
-  .screen { display: none; flex-direction: column; height: 100%; overflow: hidden; }
-  .screen.active { display: flex; }
+.screen{display:none;flex-direction:column;height:100%;overflow:hidden}
+.screen.active{display:flex}
 
-  /* ── Scrollable body ── */
-  .screen-body { flex: 1; overflow-y: auto; padding: 12px 14px 24px; }
-  .screen-body::-webkit-scrollbar { width: 4px; }
-  .screen-body::-webkit-scrollbar-thumb { background: var(--cyan); border-radius: 2px; }
+/* ── scrollable body ── */
+.screen-body{flex:1;overflow-y:auto;padding:10px 12px 28px}
+.screen-body::-webkit-scrollbar{width:4px}
+.screen-body::-webkit-scrollbar-thumb{background:var(--rust);border-radius:2px}
 
-  /* ── Top bar ── */
-  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px 6px; background: rgba(10,14,26,0.9); border-bottom: 1px solid rgba(39,224,240,0.25); flex-shrink: 0; }
-  .topbar-title { font-size: 17px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; text-shadow: 0 0 8px var(--cyan); }
-  .back-btn { background: none; border: 1px solid var(--cyan); color: var(--cyan); padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 700; letter-spacing: 1px; }
-  .back-btn:hover { background: rgba(39,224,240,0.15); }
+/* ── top bar — riveted metal plate ── */
+.topbar{display:flex;align-items:center;justify-content:space-between;
+  padding:8px 14px 7px;flex-shrink:0;
+  background:linear-gradient(180deg,#1e2314 0%,#141810 100%);
+  border-bottom:2px solid var(--edge);
+  box-shadow:0 2px 12px rgba(0,0,0,0.8)}
+.topbar::before{content:'';position:absolute;left:0;right:0;top:0;height:1px;background:rgba(90,138,60,0.4)}
+.topbar-title{font-size:16px;font-weight:900;letter-spacing:3px;text-transform:uppercase;
+  color:var(--rust);text-shadow:0 0 10px rgba(200,116,40,0.6);position:relative}
+.back-btn{background:var(--plate);border:1px solid var(--edge);color:var(--steel);
+  padding:5px 12px;cursor:pointer;font-size:12px;font-weight:700;letter-spacing:1px;
+  font-family:inherit;text-transform:uppercase;
+  clip-path:polygon(6px 0%,100% 0%,100% 100%,0% 100%,0% 6px)}
+.back-btn:hover{background:var(--plate2);color:var(--text);border-color:var(--rust)}
 
-  /* ── Resource bar ── */
-  .resource-bar { display: flex; gap: 8px; overflow-x: auto; padding: 8px 14px; background: rgba(10,14,26,0.7); flex-shrink: 0; }
-  .resource-bar::-webkit-scrollbar { display: none; }
-  .resource-badge { display: flex; align-items: center; gap: 5px; background: var(--slate); border: 1px solid; border-radius: 20px; padding: 4px 10px; white-space: nowrap; font-size: 12px; font-weight: 600; }
+/* ── resource bar ── */
+.resource-bar{display:flex;gap:6px;overflow-x:auto;padding:6px 12px;
+  background:#0f1209;border-bottom:1px solid var(--edge);flex-shrink:0}
+.resource-bar::-webkit-scrollbar{display:none}
+.res-badge{display:flex;align-items:center;gap:4px;
+  background:var(--plate);border:1px solid var(--edge);
+  padding:4px 9px;white-space:nowrap;font-size:11px;font-weight:700;
+  clip-path:polygon(5px 0%,100% 0%,100% 100%,0% 100%,0% 5px)}
 
-  /* ── Tech panel ── */
-  .panel { background: var(--slate); border: 1.5px solid var(--cyan); border-radius: var(--border-r); padding: 14px; box-shadow: 0 0 8px rgba(39,224,240,0.25); margin-bottom: 12px; }
-  .panel.amber { border-color: var(--amber); box-shadow: 0 0 8px rgba(240,164,39,0.25); }
-  .panel.magenta { border-color: var(--magenta); box-shadow: 0 0 8px rgba(199,82,242,0.25); }
-  .panel.green { border-color: var(--green); box-shadow: 0 0 8px rgba(68,232,122,0.25); }
-  .panel.dim { border-color: rgba(240,164,39,0.3); box-shadow: none; }
+/* ── gritty metal plate panel ── */
+.panel{background:var(--plate);
+  border-top:1px solid #4a5535;border-left:1px solid #4a5535;
+  border-right:1px solid #1a1e10;border-bottom:2px solid #0d0f08;
+  padding:12px;margin-bottom:10px;position:relative;overflow:hidden}
+.panel::before{content:'';position:absolute;inset:0;
+  background:repeating-linear-gradient(135deg,transparent,transparent 14px,rgba(255,255,255,0.012) 14px,rgba(255,255,255,0.012) 15px);
+  pointer-events:none}
+.panel.rust{border-top-color:var(--rust);box-shadow:inset 0 0 20px rgba(200,116,40,0.08),0 0 8px rgba(200,116,40,0.2)}
+.panel.mil{border-top-color:var(--mil);box-shadow:inset 0 0 20px rgba(90,138,60,0.08),0 0 8px rgba(90,138,60,0.2)}
+.panel.blood{border-top-color:var(--blood);box-shadow:inset 0 0 20px rgba(192,48,16,0.1),0 0 8px rgba(192,48,16,0.25)}
+.panel.steel{border-top-color:var(--steel);box-shadow:none}
+/* rivet dots on corners */
+.panel.riveted::after{content:'· · · ·';position:absolute;top:3px;right:6px;font-size:8px;color:var(--edge);letter-spacing:3px}
 
-  /* ── Chamfered button ── */
-  .gal-btn { display: inline-block; background: none; border: none; cursor: pointer; padding: 0; }
-  .gal-btn-inner {
-    display: inline-flex; align-items: center; justify-content: center;
-    padding: 9px 20px; font-size: 13px; font-weight: 800; letter-spacing: 1.5px;
-    text-transform: uppercase; color: #fff; position: relative;
-    clip-path: polygon(10px 0%,100% 0%,100% 100%,0% 100%,0% 10px);
-  }
-  .gal-btn.cyan .gal-btn-inner { background: linear-gradient(160deg,rgba(39,224,240,0.5),rgba(39,224,240,0.15)); outline: 1.5px solid var(--cyan); box-shadow: 0 0 10px rgba(39,224,240,0.4); }
-  .gal-btn.amber .gal-btn-inner { background: linear-gradient(160deg,rgba(240,164,39,0.5),rgba(240,164,39,0.15)); outline: 1.5px solid var(--amber); box-shadow: 0 0 10px rgba(240,164,39,0.4); }
-  .gal-btn.magenta .gal-btn-inner { background: linear-gradient(160deg,rgba(199,82,242,0.5),rgba(199,82,242,0.15)); outline: 1.5px solid var(--magenta); box-shadow: 0 0 10px rgba(199,82,242,0.4); }
-  .gal-btn:active .gal-btn-inner { filter: brightness(1.4); }
+/* ── chamfered gritty button ── */
+.gal-btn{display:inline-block;background:none;border:none;cursor:pointer;padding:0;font-family:inherit}
+.gal-btn-inner{display:inline-flex;align-items:center;justify-content:center;
+  padding:9px 20px;font-size:12px;font-weight:900;letter-spacing:2px;
+  text-transform:uppercase;color:var(--text);
+  clip-path:polygon(8px 0%,100% 0%,100% calc(100% - 8px),calc(100% - 8px) 100%,0% 100%,0% 8px)}
+.gal-btn.rust .gal-btn-inner{background:linear-gradient(160deg,rgba(200,116,40,0.55),rgba(200,116,40,0.18));
+  outline:1.5px solid var(--rust);text-shadow:0 0 6px rgba(200,116,40,0.8)}
+.gal-btn.mil .gal-btn-inner{background:linear-gradient(160deg,rgba(90,138,60,0.55),rgba(90,138,60,0.18));
+  outline:1.5px solid var(--mil);text-shadow:0 0 6px rgba(90,138,60,0.8)}
+.gal-btn.blood .gal-btn-inner{background:linear-gradient(160deg,rgba(192,48,16,0.65),rgba(192,48,16,0.2));
+  outline:1.5px solid var(--blood);text-shadow:0 0 6px rgba(192,48,16,0.8)}
+.gal-btn:active .gal-btn-inner{filter:brightness(1.5)}
 
-  /* ── Planet canvas ── */
-  .planet-wrap { display: flex; justify-content: center; padding: 16px 0 8px; }
-  canvas.planet { border-radius: 50%; }
+/* ── continent map canvas wrapper ── */
+#continent-map-wrap{position:relative;width:100%;margin-bottom:10px;flex-shrink:0}
+#continent-map-wrap canvas{display:block;width:100%;cursor:pointer}
 
-  /* ── Continent/planet rows ── */
-  .list-row { display: flex; align-items: center; gap: 12px; cursor: pointer; text-decoration: none; color: inherit; }
-  .list-row:hover .panel { filter: brightness(1.12); }
-  .row-icon { font-size: 22px; width: 34px; text-align: center; flex-shrink: 0; }
-  .row-text { flex: 1; min-width: 0; }
-  .row-title { font-size: 15px; font-weight: 700; }
-  .row-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  .row-chevron { color: rgba(255,255,255,0.35); font-size: 18px; }
+/* ── building slot grid (overlaid as HTML for clicks) ── */
+#slot-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px}
+.bslot{background:var(--plate);border-top:1px solid var(--edge);border-left:1px solid var(--edge);
+  border-right:1px solid #0d0f08;border-bottom:2px solid #0d0f08;
+  padding:8px 4px 6px;text-align:center;cursor:pointer;min-height:78px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  position:relative;transition:background 0.15s}
+.bslot.occupied{background:var(--plate2)}
+.bslot.occupied:hover{background:#2c3520;border-top-color:var(--rust)}
+.bslot.empty:hover{background:#1f2418;border-top-color:var(--edge)}
+.bslot.empty .slot-icon{color:var(--muted);font-size:11px}
+.bslot .slot-icon{font-size:22px;line-height:1}
+.bslot .slot-name{font-size:8px;letter-spacing:0.5px;text-transform:uppercase;color:var(--muted);line-height:1.2;max-width:60px}
+.bslot .slot-level{font-size:10px;font-weight:900;color:var(--rust);letter-spacing:1px}
+.bslot.locked{background:#100f0c;cursor:default;opacity:0.6}
+/* damage crack on locked slots */
+.bslot.locked::after{content:'✕';position:absolute;font-size:20px;color:rgba(192,48,16,0.3);top:50%;left:50%;transform:translate(-50%,-50%)}
 
-  /* ── Building / roster lists ── */
-  .roster-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
-  .roster-row:last-child { border-bottom: none; }
-  .roster-icon { font-size: 20px; width: 28px; flex-shrink: 0; }
-  .roster-name { font-size: 14px; font-weight: 700; }
-  .roster-role { font-size: 12px; color: var(--muted); margin-top: 2px; }
+/* ── building detail ── */
+.bdetail-icon{font-size:52px;filter:drop-shadow(0 0 8px rgba(200,116,40,0.5))}
 
-  /* ── Section headers ── */
-  .section-title { font-size: 11px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 8px; }
+/* ── roster rows ── */
+.roster-row{display:flex;align-items:flex-start;gap:10px;padding:8px 0;
+  border-bottom:1px solid var(--edge)}
+.roster-row:last-child{border-bottom:none}
 
-  /* ── Progress bar ── */
-  .progress-wrap { background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; overflow: hidden; margin-top: 6px; }
-  .progress-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
+/* ── section label ── */
+.sec-label{font-size:10px;font-weight:900;letter-spacing:3px;text-transform:uppercase;
+  color:var(--rust);margin-bottom:8px;border-left:3px solid var(--rust);padding-left:8px}
 
-  /* ── Toast ── */
-  #toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); background: rgba(39,224,240,0.9); color: #000; padding: 8px 20px; border-radius: 20px; font-weight: 700; font-size: 13px; pointer-events: none; opacity: 0; transition: opacity 0.3s; z-index: 999; }
+/* ── conquest progress ── */
+.conquest-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.conquest-pip{width:14px;height:14px;border:1px solid var(--edge);
+  clip-path:polygon(3px 0%,100% 0%,100% calc(100%-3px),calc(100%-3px) 100%,0 100%,0 3px)}
+.conquest-pip.done{background:var(--conquered);border-color:var(--mil)}
+.conquest-pip.locked{background:#1a1c14}
 
-  /* ── Modal overlay ── */
-  #modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 100; align-items: flex-end; justify-content: center; }
-  #modal-overlay.open { display: flex; }
-  #modal-box { background: #0e1422; border: 1.5px solid var(--cyan); border-radius: 16px 16px 0 0; padding: 22px; width: 100%; max-width: 520px; max-height: 75vh; overflow-y: auto; }
-  .modal-title { font-size: 18px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; text-shadow: 0 0 6px var(--cyan); margin-bottom: 12px; }
+/* ── planet canvas ── */
+.planet-wrap{display:flex;justify-content:center;padding:12px 0 6px}
 
-  /* Solar system orbit ring */
-  .orbit-ring { display: flex; align-items: center; gap: 14px; padding: 10px 0; }
+/* ── solar planet rows ── */
+.planet-row{display:flex;align-items:center;gap:12px;cursor:pointer}
+.planet-row .panel{flex:1}
+.planet-row:hover .panel{border-top-color:var(--rust)}
 
-  /* Misc helpers */
-  .glow-cyan { color: var(--cyan); text-shadow: 0 0 6px var(--cyan); }
-  .glow-amber { color: var(--amber); text-shadow: 0 0 6px var(--amber); }
-  .glow-magenta { color: var(--magenta); text-shadow: 0 0 6px var(--magenta); }
-  .mb8 { margin-bottom: 8px; }
-  .mb12 { margin-bottom: 12px; }
-  .mt8 { margin-top: 8px; }
-  .mt12 { margin-top: 12px; }
-  .center { text-align: center; }
-  .small-muted { font-size: 12px; color: var(--muted); line-height: 1.5; }
+/* ── modal ── */
+#modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.82);z-index:200;
+  align-items:flex-end;justify-content:center}
+#modal-overlay.open{display:flex}
+#modal-box{background:#141810;
+  border-top:2px solid var(--rust);border-left:1px solid var(--edge);border-right:1px solid var(--edge);
+  padding:20px;width:100%;max-width:540px;max-height:80vh;overflow-y:auto;
+  box-shadow:0 -4px 30px rgba(0,0,0,0.9)}
+#modal-box::before{content:'';display:block;width:40px;height:3px;background:var(--rust);margin:0 auto 14px;opacity:0.8}
+
+/* ── toast ── */
+#toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);
+  background:var(--rust);color:#0b0d08;padding:7px 18px;
+  font-weight:900;font-size:12px;letter-spacing:1px;text-transform:uppercase;
+  pointer-events:none;opacity:0;transition:opacity 0.3s;z-index:999;
+  clip-path:polygon(8px 0%,100% 0%,100% 100%,0% 100%,0% 8px)}
+
+/* misc */
+.center{text-align:center}
+.mt8{margin-top:8px}.mt12{margin-top:12px}.mb8{margin-bottom:8px}.mb12{margin-bottom:12px}
+.small-muted{font-size:12px;color:var(--muted);line-height:1.6}
+.prog-wrap{background:rgba(255,255,255,0.06);height:5px;margin-top:5px;overflow:hidden}
+.prog-fill{height:100%;transition:width 0.6s ease}
+.glow-rust{color:var(--rust);text-shadow:0 0 6px rgba(200,116,40,0.7)}
+.glow-mil{color:var(--mil);text-shadow:0 0 6px rgba(90,138,60,0.7)}
+.glow-blood{color:var(--blood);text-shadow:0 0 6px rgba(192,48,16,0.7)}
 </style>
 </head>
 <body>
-
 <canvas id="starfield"></canvas>
-
 <div id="app">
 
-  <!-- ══════════════ HOME PLANET SCREEN ══════════════ -->
+  <!-- ═══ HOME ═══ -->
   <div id="screen-home" class="screen active">
     <div class="topbar">
-      <span class="topbar-title glow-cyan">Legion Galaxy</span>
-      <button class="back-btn" onclick="showSolarSystem()">⚡ System Map</button>
+      <span class="topbar-title">☠ Legion Galaxy</span>
+      <button class="back-btn" onclick="showSolarSystem()">⚡ System</button>
     </div>
     <div class="resource-bar" id="resource-bar"></div>
     <div class="screen-body">
-      <div class="planet-wrap"><canvas id="home-planet" class="planet" width="150" height="150"></canvas></div>
+      <div class="planet-wrap"><canvas id="home-planet" width="140" height="140"></canvas></div>
       <div class="center mb8">
-        <div style="font-size:22px;font-weight:900;letter-spacing:3px;text-shadow:0 0 10px var(--cyan)" id="planet-name-label">NEW TERRA</div>
-        <div class="glow-amber mt8" id="conquest-label" style="font-size:13px;font-family:monospace"></div>
-        <div class="progress-wrap mt8" style="max-width:200px;margin:8px auto 0"><div class="progress-fill" id="conquest-bar" style="background:var(--amber)"></div></div>
+        <div style="font-size:20px;font-weight:900;letter-spacing:4px;text-transform:uppercase;color:var(--rust);text-shadow:0 0 10px rgba(200,116,40,0.5)" id="planet-name-label">NEW TERRA</div>
+        <div class="conquest-row mt8" id="conquest-pips" style="justify-content:center"></div>
+        <div style="font-size:11px;color:var(--muted);letter-spacing:1px" id="conquest-label"></div>
       </div>
-      <div class="section-title glow-cyan mt12">Continents</div>
+      <div class="sec-label">Continents</div>
       <div id="continent-list"></div>
-      <div id="spaceport-locked" class="panel amber center small-muted" style="display:none;margin-top:4px"></div>
+      <div id="spaceport-locked" class="panel blood" style="display:none;font-size:12px;color:var(--muted);line-height:1.6"></div>
     </div>
   </div>
 
-  <!-- ══════════════ CONTINENT SCREEN ══════════════ -->
+  <!-- ═══ CONTINENT ═══ -->
   <div id="screen-continent" class="screen">
     <div class="topbar">
-      <button class="back-btn" onclick="goHome()">← Home</button>
-      <span class="topbar-title" id="continent-title"></span>
-      <span></span>
+      <button class="back-btn" onclick="goHome()">← Base</button>
+      <span class="topbar-title glow-rust" id="continent-title" style="font-size:13px"></span>
+      <span style="font-size:11px;color:var(--muted)" id="continent-status"></span>
     </div>
-    <div class="screen-body" id="continent-body"></div>
+    <div class="resource-bar" id="resource-bar-cont"></div>
+    <div id="continent-map-wrap">
+      <canvas id="continent-map"></canvas>
+    </div>
+    <div class="screen-body" style="padding-top:6px" id="continent-body"></div>
   </div>
 
-  <!-- ══════════════ BUILDING DETAIL SCREEN ══════════════ -->
+  <!-- ═══ BUILDING ═══ -->
   <div id="screen-building" class="screen">
     <div class="topbar">
-      <button class="back-btn" id="building-back-btn">← Back</button>
-      <span class="topbar-title" id="building-screen-title"></span>
+      <button class="back-btn" id="building-back-btn">← Continent</button>
+      <span class="topbar-title" id="building-screen-title" style="font-size:13px"></span>
       <span></span>
     </div>
     <div class="screen-body" id="building-body"></div>
   </div>
 
-  <!-- ══════════════ SOLAR SYSTEM SCREEN ══════════════ -->
+  <!-- ═══ SOLAR ═══ -->
   <div id="screen-solar" class="screen">
     <div class="topbar">
-      <button class="back-btn" onclick="goHome()">← Home</button>
-      <span class="topbar-title glow-magenta">Korath System</span>
+      <button class="back-btn" onclick="goHome()">← Base</button>
+      <span class="topbar-title" style="color:var(--mil)">⬡ Korath System</span>
       <span></span>
     </div>
     <div class="screen-body" id="solar-body"></div>
@@ -172,234 +228,326 @@
 
 </div>
 
-<!-- Modal -->
 <div id="modal-overlay" onclick="closeModal()">
   <div id="modal-box" onclick="event.stopPropagation()">
-    <div class="modal-title" id="modal-title"></div>
+    <div style="font-size:16px;font-weight:900;letter-spacing:2px;text-transform:uppercase;color:var(--rust);margin-bottom:12px" id="modal-title"></div>
     <div id="modal-body"></div>
     <div class="mt12 center">
-      <button class="gal-btn cyan" onclick="closeModal()"><div class="gal-btn-inner">Close</div></button>
+      <button class="gal-btn rust" onclick="closeModal()"><div class="gal-btn-inner">Close</div></button>
     </div>
   </div>
 </div>
-
 <div id="toast"></div>
 
 <script>
 // ═══════════════════════════════════════════════
-//  DATA MODEL
+//  DATA
 // ═══════════════════════════════════════════════
 const BUILDINGS = {
-  colonyCenter:        { name:'Colony Center',        icon:'🏛️',  summary:'Core hub of your base. Gates the max level of every other building.' },
-  resourceCollector:   { name:'Resource Collector',   icon:'⛏️',  summary:'Gathers construction materials. Upgrade to increase yield per hour.' },
-  barracks:            { name:'Barracks',             icon:'🛡️',  summary:'Trains Infantry, Tanks, and Mounted Units from your population.' },
-  farm:                { name:'Farm',                 icon:'🌾',  summary:'Produces food to sustain and grow your population.' },
-  house:               { name:'House',                icon:'🏠',  summary:'Increases population capacity for workers and troops.' },
-  researchCenter:      { name:'Research Center',      icon:'⚛️',  summary:'Unlocks and improves technologies — including hull strength, weapon, and speed upgrades for ships.' },
-  excellorantFactory:  { name:'Excellorant Factory',  icon:'⚡',  summary:'Produces Excellorant, a boost resource that speeds up ship factories, barracks, resource collectors, and farms. Can be used in small or large amounts.' },
-  spaceport:           { name:'Spaceport',            icon:'🚀',  summary:'Build starships and launch them into your solar system. Unlocked after conquering 3 of 5 continents.' },
+  colonyCenter:       {name:'Colony Center',       short:'COLONY',    icon:'🏛️', summary:'Core command hub. Governs maximum level of every other structure on this continent.'},
+  resourceCollector:  {name:'Resource Collector',  short:'EXTRACTOR', icon:'⛏️', summary:'Mines raw construction materials from the ground. Each upgrade increases hourly output.'},
+  barracks:           {name:'Barracks',            short:'BARRACKS',  icon:'🪖', summary:'Trains Infantry, Tanks, and Mounted Units. Capacity tied to House population.'},
+  farm:               {name:'Farm',                short:'FARM',      icon:'🌾', summary:'Produces food rations to feed troops and sustain population growth.'},
+  house:              {name:'Housing Block',       short:'HOUSING',   icon:'🏚️', summary:'Shelters workers and soldiers. Higher levels increase max population capacity.'},
+  researchCenter:     {name:'Research Center',     short:'RESEARCH',  icon:'⚛️', summary:'Drives technological advances: hull plating, weapon systems, and thruster drives for your fleet.'},
+  excellorantFactory: {name:'Excellorant Factory', short:'EXCELL.',   icon:'⚡', summary:'Synthesizes Excellorant — a volatile compound that accelerates factories, barracks, farms, and resource collectors when applied.'},
+  spaceport:          {name:'Spaceport',           short:'SPACEPORT', icon:'🚀', summary:'Constructs and launches starships. Required to project power beyond this planet. Unlocked at 3/5 continents.'},
 };
+
+const SLOT_ORDER = ['colonyCenter','resourceCollector','barracks','farm','house','researchCenter','excellorantFactory','spaceport'];
 
 const TROOPS = [
-  { name:'Infantry',       icon:'🪖', role:'All-purpose ground unit' },
-  { name:'Tanks',          icon:'🛡️', role:'Defensive specialist (late game)' },
-  { name:'Mounted Units',  icon:'🐎', role:'Fast-attack raider' },
+  {name:'Infantry',      icon:'🪖', role:'All-purpose ground combatant'},
+  {name:'Tanks',         icon:'🛡️', role:'Heavy defensive unit (late game)'},
+  {name:'Mounted Units', icon:'🐎', role:'Fast-attack raider — flanks enemy lines'},
 ];
-
 const SHIPS = [
-  { name:'Fighter',     icon:'✈️', role:'Cheap and used in large numbers' },
-  { name:'Hauler',      icon:'🛸', role:'Carries cargo and ground units between planets' },
-  { name:'Cruiser',     icon:'🚀', role:'Slower, general-purpose space combat ship' },
-  { name:'Probe',       icon:'🔭', role:'Recon enemy planets and view their surface activity' },
-  { name:'Dreadnaught', icon:'💫', role:'Very expensive capital ship for large fleet battles' },
+  {name:'Fighter',     icon:'✈️', role:'Cheap and deployed in large numbers'},
+  {name:'Hauler',      icon:'🛸', role:'Transports troops, builders and cargo'},
+  {name:'Cruiser',     icon:'🚀', role:'General-purpose space combat vessel'},
+  {name:'Probe',       icon:'🔭', role:'Recons enemy planets — reveals surface activity'},
+  {name:'Dreadnaught', icon:'💥', role:'Extremely expensive capital ship — turns the tide of fleet battles'},
 ];
-
 const RESEARCH = [
-  { name:'Hull Integrity I',    icon:'🔩', desc:'Increases all ship hull HP by 15%.' },
-  { name:'Hull Integrity II',   icon:'🔩', desc:'Increases all ship hull HP by an additional 20%.' },
-  { name:'Weapon Systems I',    icon:'🔫', desc:'Increases ship weapon damage by 15%.' },
-  { name:'Weapon Systems II',   icon:'🔫', desc:'Increases ship weapon damage by an additional 20%.' },
-  { name:'Thruster Drive I',    icon:'💨', desc:'Increases all ship travel speed by 10%.' },
-  { name:'Thruster Drive II',   icon:'💨', desc:'Increases all ship travel speed by an additional 15%.' },
+  {name:'Hull Plating Mk.I',   icon:'🔩', desc:'Ship hull HP +15%',   cost:200},
+  {name:'Hull Plating Mk.II',  icon:'🔩', desc:'Ship hull HP +20%',   cost:350},
+  {name:'Weapon Systems Mk.I', icon:'🔫', desc:'Ship damage +15%',    cost:200},
+  {name:'Weapon Systems Mk.II',icon:'🔫', desc:'Ship damage +20%',    cost:400},
+  {name:'Thruster Drive Mk.I', icon:'💨', desc:'Ship speed +10%',     cost:200},
+  {name:'Thruster Drive Mk.II',icon:'💨', desc:'Ship speed +15%',     cost:350},
 ];
 
-// Live game state
 const state = {
-  resources: { metal: 12400, food: 8250, population: 3120, research: 640, excellorant: 85 },
-  planet: {
-    name: 'New Terra',
-    continents: [
-      { name:'Continent I — Aurelia',   conquered: true,  threat:'Dormant',    buildings: Object.keys(BUILDINGS).filter(k=>k!=='spaceport').map(k=>({ type:k, level:1 })) },
-      { name:'Continent II — Voss',      conquered: false, threat:'Guarded',    buildings: [] },
-      { name:'Continent III — Kethra',   conquered: false, threat:'Guarded',    buildings: [] },
-      { name:'Continent IV — Drannix',   conquered: false, threat:'Fortified',  buildings: [] },
-      { name:'Continent V — Solhaven',   conquered: false, threat:'Fortified',  buildings: [] },
+  res:{metal:12400,food:8250,pop:3120,research:640,excellorant:85},
+  planet:{
+    name:'New Terra',
+    continents:[
+      {name:'Aurelia',   conquered:true,  threat:'DORMANT',    bldgs:SLOT_ORDER.slice(0,7).map(k=>({type:k,level:1}))},
+      {name:'Voss',      conquered:false, threat:'GUARDED',    bldgs:[]},
+      {name:'Kethra',    conquered:false, threat:'GUARDED',    bldgs:[]},
+      {name:'Drannix',   conquered:false, threat:'FORTIFIED',  bldgs:[]},
+      {name:'Solhaven',  conquered:false, threat:'FORTIFIED',  bldgs:[]},
     ]
   },
-  solarSystem: [
-    { name:'New Terra',        isHome:true,  isAgri:false, color:[39,224,240],  colonized:true  },
-    { name:'Verdant Expanse',  isHome:false, isAgri:true,  color:[68,232,122],  colonized:false },
-    { name:'Cinder Hollow',    isHome:false, isAgri:false, color:[240,100,60],  colonized:false },
-    { name:'Glacian Reach',    isHome:false, isAgri:false, color:[120,180,255], colonized:false },
-    { name:'Obsidian Drift',   isHome:false, isAgri:false, color:[170,120,220], colonized:false },
+  solar:[
+    {name:'New Terra',       isHome:true,  isAgri:false, col:[200,116,40],  colonized:true},
+    {name:'Verdant Expanse', isHome:false, isAgri:true,  col:[90,160,60],   colonized:false},
+    {name:'Cinder Hollow',   isHome:false, isAgri:false, col:[180,70,30],   colonized:false},
+    {name:'Glacian Reach',   isHome:false, isAgri:false, col:[80,140,210],  colonized:false},
+    {name:'Obsidian Drift',  isHome:false, isAgri:false, col:[140,90,190],  colonized:false},
   ],
-  selectedContinent: 0,
-  selectedBuilding: null,
-  buildingFromContinent: false,
-  researchDone: new Set(),
+  selCont:0,
+  selBldg:null,
+  researchDone:new Set(),
 };
 
-const conqueredCount = () => state.planet.continents.filter(c=>c.conquered).length;
-const spaceportUnlocked = () => conqueredCount() >= 3;
+const cc = ()=>state.planet.continents.filter(c=>c.conquered).length;
+const spUnlocked = ()=>cc()>=3;
 
-// Resource tick (passive income)
-setInterval(() => {
-  const c1 = state.planet.continents[0];
-  const rcLevel = (c1.buildings.find(b=>b.type==='resourceCollector')?.level||0);
-  const farmLevel = (c1.buildings.find(b=>b.type==='farm')?.level||0);
-  const factoryLevel = (c1.buildings.find(b=>b.type==='excellorantFactory')?.level||0);
-  state.resources.metal      = Math.min(999999, state.resources.metal      + rcLevel * 8);
-  state.resources.food       = Math.min(999999, state.resources.food       + farmLevel * 6);
-  state.resources.excellorant= Math.min(9999,   state.resources.excellorant+ factoryLevel);
-  renderResourceBar();
+setInterval(()=>{
+  const b=state.planet.continents[0].bldgs;
+  const lv=k=>(b.find(x=>x.type===k)?.level||0);
+  state.res.metal      = Math.min(999999, state.res.metal      + lv('resourceCollector')*10);
+  state.res.food       = Math.min(999999, state.res.food       + lv('farm')*7);
+  state.res.excellorant= Math.min(9999,   state.res.excellorant+ lv('excellorantFactory'));
+  renderResBar();
+  renderResBar2();
 }, 2000);
 
 // ═══════════════════════════════════════════════
-//  STARFIELD
+//  STARFIELD  (drifting particles + dust)
 // ═══════════════════════════════════════════════
-(function initStarfield() {
-  const canvas = document.getElementById('starfield');
-  const ctx = canvas.getContext('2d');
-  let stars = [];
-  function resize() {
-    canvas.width = window.innerWidth; canvas.height = window.innerHeight;
-    stars = Array.from({length:120}, ()=>({
-      x: Math.random()*canvas.width, y: Math.random()*canvas.height,
-      r: Math.random()*1.8+0.3, alpha: Math.random()*0.7+0.2, speed: Math.random()*0.12+0.03
+(function(){
+  const c=document.getElementById('starfield'),ctx=c.getContext('2d');
+  let stars=[];
+  function resize(){
+    c.width=window.innerWidth;c.height=window.innerHeight;
+    stars=Array.from({length:100},()=>({
+      x:Math.random()*c.width,y:Math.random()*c.height,
+      r:Math.random()*1.5+0.2,a:Math.random()*0.5+0.1,
+      s:Math.random()*0.08+0.02
     }));
   }
-  function draw() {
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    // nebula glow
-    const g = ctx.createRadialGradient(canvas.width*0.8,canvas.height*0.1,10,canvas.width*0.8,canvas.height*0.1,canvas.width*0.7);
-    g.addColorStop(0,'rgba(199,82,242,0.10)'); g.addColorStop(1,'transparent');
-    ctx.fillStyle=g; ctx.fillRect(0,0,canvas.width,canvas.height);
-    const g2 = ctx.createRadialGradient(canvas.width*0.1,canvas.height*0.9,10,canvas.width*0.1,canvas.height*0.9,canvas.width*0.5);
-    g2.addColorStop(0,'rgba(39,100,240,0.08)'); g2.addColorStop(1,'transparent');
-    ctx.fillStyle=g2; ctx.fillRect(0,0,canvas.width,canvas.height);
-    // stars
+  function draw(){
+    ctx.clearRect(0,0,c.width,c.height);
+    // subtle nebula
+    const g=ctx.createRadialGradient(c.width*.75,c.height*.15,5,c.width*.75,c.height*.15,c.width*.6);
+    g.addColorStop(0,'rgba(180,80,20,0.06)');g.addColorStop(1,'transparent');
+    ctx.fillStyle=g;ctx.fillRect(0,0,c.width,c.height);
     stars.forEach(s=>{
-      ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
-      ctx.fillStyle=`rgba(255,255,255,${s.alpha})`; ctx.fill();
-      s.y -= s.speed;
-      if(s.y < -2) { s.y=canvas.height+2; s.x=Math.random()*canvas.width; }
+      ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+      ctx.fillStyle=`rgba(200,196,180,${s.a})`;ctx.fill();
+      s.y-=s.s;if(s.y<-2){s.y=c.height+2;s.x=Math.random()*c.width;}
     });
     requestAnimationFrame(draw);
   }
-  resize(); window.addEventListener('resize',resize); draw();
+  resize();window.addEventListener('resize',resize);draw();
 })();
 
 // ═══════════════════════════════════════════════
-//  PLANET GRAPHICS  (procedural canvas spheres)
+//  PLANET GRAPHIC — gritty cracked-surface sphere
 // ═══════════════════════════════════════════════
-function drawPlanet(canvas, r, g, b, size, ring) {
-  const ctx = canvas.getContext('2d');
-  canvas.width = size; canvas.height = size;
-  const cx = size/2, cy = size/2, radius = size/2 - 2;
-  // sphere gradient — light source top-left
-  const grad = ctx.createRadialGradient(cx-radius*0.35, cy-radius*0.35, 1, cx, cy, radius);
-  grad.addColorStop(0, `rgba(${Math.min(255,r+120)},${Math.min(255,g+120)},${Math.min(255,b+120)},0.95)`);
-  grad.addColorStop(0.45, `rgba(${r},${g},${b},0.92)`);
-  grad.addColorStop(1, `rgba(${Math.floor(r*0.1)},${Math.floor(g*0.1)},${Math.floor(b*0.1)},0.9)`);
-  ctx.beginPath(); ctx.arc(cx,cy,radius,0,Math.PI*2);
-  ctx.fillStyle=grad; ctx.fill();
-  // atmosphere glow
-  const glow = ctx.createRadialGradient(cx,cy,radius*0.8,cx,cy,radius*1.15);
-  glow.addColorStop(0,'transparent'); glow.addColorStop(1,`rgba(${r},${g},${b},0.25)`);
-  ctx.beginPath(); ctx.arc(cx,cy,radius*1.15,0,Math.PI*2);
-  ctx.fillStyle=glow; ctx.fill();
-  // surface detail (subtle noise bands)
-  for(let i=0;i<3;i++){
-    const bandY = cy + (i-1)*radius*0.28;
-    const bandGrad = ctx.createLinearGradient(cx-radius,bandY,cx+radius,bandY+8);
-    bandGrad.addColorStop(0,'transparent');
-    bandGrad.addColorStop(0.3,`rgba(255,255,255,0.04)`);
-    bandGrad.addColorStop(0.7,`rgba(0,0,0,0.06)`);
-    bandGrad.addColorStop(1,'transparent');
-    ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,radius,0,Math.PI*2);
-    ctx.clip(); ctx.fillStyle=bandGrad;
-    ctx.fillRect(cx-radius,bandY,radius*2,10); ctx.restore();
+function drawPlanet(canvas,[r,g,b],size,ring){
+  const ctx=canvas.getContext('2d');
+  canvas.width=size;canvas.height=size;
+  const cx=size/2,cy=size/2,rad=size/2-3;
+
+  // deep space shadow behind sphere
+  const bg=ctx.createRadialGradient(cx,cy,rad*.5,cx,cy,rad*1.4);
+  bg.addColorStop(0,'transparent');bg.addColorStop(1,`rgba(${Math.floor(r*.3)},${Math.floor(g*.3)},${Math.floor(b*.3)},0.4)`);
+  ctx.fillStyle=bg;ctx.fillRect(0,0,size,size);
+
+  // base sphere
+  const sphere=ctx.createRadialGradient(cx-rad*.4,cy-rad*.35,1,cx,cy,rad);
+  sphere.addColorStop(0,`rgba(${Math.min(255,r+90)},${Math.min(255,g+70)},${Math.min(255,b+50)},1)`);
+  sphere.addColorStop(0.4,`rgba(${r},${g},${b},1)`);
+  sphere.addColorStop(0.78,`rgba(${Math.floor(r*.35)},${Math.floor(g*.3)},${Math.floor(b*.25)},1)`);
+  sphere.addColorStop(1,`rgba(${Math.floor(r*.08)},${Math.floor(g*.06)},${Math.floor(b*.05)},1)`);
+  ctx.beginPath();ctx.arc(cx,cy,rad,0,Math.PI*2);
+  ctx.fillStyle=sphere;ctx.fill();
+
+  // crater/surface damage
+  const seed=r*7+g*13+b*3;
+  ctx.save();ctx.beginPath();ctx.arc(cx,cy,rad,0,Math.PI*2);ctx.clip();
+  for(let i=0;i<8;i++){
+    const cx2=cx+(Math.sin(seed+i*1.3)*rad*.55);
+    const cy2=cy+(Math.cos(seed+i*0.9)*rad*.5);
+    const cr=rad*(0.04+Math.abs(Math.sin(seed+i))*0.1);
+    const cg=ctx.createRadialGradient(cx2,cy2,0,cx2,cy2,cr);
+    cg.addColorStop(0,'rgba(0,0,0,0.45)');cg.addColorStop(0.6,'rgba(0,0,0,0.18)');cg.addColorStop(1,'transparent');
+    ctx.fillStyle=cg;ctx.beginPath();ctx.arc(cx2,cy2,cr,0,Math.PI*2);ctx.fill();
   }
+  // terrain bands
+  for(let i=0;i<4;i++){
+    const by=cy-rad*.5+i*rad*.35;
+    const bg2=ctx.createLinearGradient(cx-rad,by,cx+rad,by+6);
+    bg2.addColorStop(0,'transparent');bg2.addColorStop(.4,`rgba(0,0,0,0.12)`);
+    bg2.addColorStop(.7,`rgba(255,255,255,0.03)`);bg2.addColorStop(1,'transparent');
+    ctx.fillStyle=bg2;ctx.fillRect(cx-rad,by,rad*2,7);
+  }
+  ctx.restore();
+
+  // terminator shadow
+  const term=ctx.createRadialGradient(cx+rad*.2,cy,rad*.1,cx+rad*.5,cy,rad*1.1);
+  term.addColorStop(0,'transparent');term.addColorStop(.6,'transparent');
+  term.addColorStop(1,'rgba(0,0,0,0.72)');
+  ctx.beginPath();ctx.arc(cx,cy,rad,0,Math.PI*2);
+  ctx.fillStyle=term;ctx.fill();
+
+  // atmosphere rim
+  const atm=ctx.createRadialGradient(cx,cy,rad*.88,cx,cy,rad*1.12);
+  atm.addColorStop(0,'transparent');atm.addColorStop(1,`rgba(${r},${g},${b},0.22)`);
+  ctx.beginPath();ctx.arc(cx,cy,rad*1.12,0,Math.PI*2);
+  ctx.fillStyle=atm;ctx.fill();
+
   // ring
   if(ring){
-    ctx.save(); ctx.translate(cx,cy); ctx.rotate(-0.2); ctx.scale(1,0.28);
-    const ringGrad = ctx.createLinearGradient(-radius*1.65,0,radius*1.65,0);
-    ringGrad.addColorStop(0,'transparent');
-    ringGrad.addColorStop(0.15,`rgba(${r},${g},${b},0.5)`);
-    ringGrad.addColorStop(0.5,`rgba(${r},${g},${b},0.15)`);
-    ringGrad.addColorStop(0.85,`rgba(${r},${g},${b},0.5)`);
-    ringGrad.addColorStop(1,'transparent');
-    ctx.strokeStyle=ringGrad; ctx.lineWidth=8;
-    ctx.beginPath(); ctx.ellipse(0,0,radius*1.6,radius*1.6,0,0,Math.PI*2); ctx.stroke();
+    ctx.save();ctx.translate(cx,cy);ctx.rotate(-.18);ctx.scale(1,.22);
+    ctx.strokeStyle=`rgba(${r},${g},${b},0.55)`;ctx.lineWidth=6;
+    ctx.beginPath();ctx.ellipse(0,0,rad*1.65,rad*1.65,0,0,Math.PI*2);ctx.stroke();
+    ctx.strokeStyle=`rgba(${r},${g},${b},0.2)`;ctx.lineWidth=14;
+    ctx.stroke();
     ctx.restore();
   }
 }
 
 // ═══════════════════════════════════════════════
-//  RESOURCE BAR
+//  CONTINENT MAP — procedural terrain + grid
 // ═══════════════════════════════════════════════
-function fmt(n){ return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':n; }
-function renderResourceBar(){
-  const r = state.resources;
-  document.getElementById('resource-bar').innerHTML = `
-    <div class="resource-badge" style="border-color:var(--cyan);color:var(--cyan)">⛏️ ${fmt(r.metal)}</div>
-    <div class="resource-badge" style="border-color:var(--green);color:var(--green)">🌾 ${fmt(r.food)}</div>
-    <div class="resource-badge" style="border-color:var(--amber);color:var(--amber)">👥 ${fmt(r.population)}</div>
-    <div class="resource-badge" style="border-color:var(--magenta);color:var(--magenta)">⚛️ ${fmt(r.research)}</div>
-    <div class="resource-badge" style="border-color:yellow;color:yellow">⚡ ${fmt(r.excellorant)}</div>
-  `;
+function drawContinentMap(canvas, continent, W){
+  const H=Math.round(W*0.38);
+  canvas.width=W; canvas.height=H;
+  const ctx=canvas.getContext('2d');
+
+  // terrain base gradient
+  const terr=ctx.createLinearGradient(0,0,W,H);
+  if(continent.conquered){
+    terr.addColorStop(0,'#1c2410');terr.addColorStop(.5,'#202a14');terr.addColorStop(1,'#191f0e');
+  } else {
+    terr.addColorStop(0,'#1e1510');terr.addColorStop(.5,'#221a12');terr.addColorStop(1,'#1a1208');
+  }
+  ctx.fillStyle=terr;ctx.fillRect(0,0,W,H);
+
+  // noise patches
+  const seed=continent.name.charCodeAt(0)*7+continent.name.charCodeAt(1)*13;
+  for(let i=0;i<30;i++){
+    const px=(Math.sin(seed+i*2.3)*0.5+0.5)*W;
+    const py=(Math.cos(seed+i*1.7)*0.5+0.5)*H;
+    const pr=4+Math.abs(Math.sin(seed+i))*22;
+    const pat=ctx.createRadialGradient(px,py,0,px,py,pr);
+    if(continent.conquered){
+      pat.addColorStop(0,'rgba(50,70,20,0.35)');pat.addColorStop(1,'transparent');
+    } else {
+      pat.addColorStop(0,'rgba(80,30,10,0.4)');pat.addColorStop(1,'transparent');
+    }
+    ctx.fillStyle=pat;ctx.fillRect(Math.max(0,px-pr),Math.max(0,py-pr),pr*2,pr*2);
+  }
+
+  // grid overlay (tactical map look)
+  ctx.strokeStyle='rgba(255,255,255,0.04)';ctx.lineWidth=1;
+  for(let x=0;x<W;x+=32){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<H;y+=32){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+
+  // craters / damage marks
+  for(let i=0;i<5;i++){
+    const cx=(Math.sin(seed*0.7+i*2.1)*0.45+0.5)*W;
+    const cy=(Math.cos(seed*1.1+i*1.6)*0.35+0.5)*H;
+    const cr=6+Math.abs(Math.sin(seed+i*3))*14;
+    const cg=ctx.createRadialGradient(cx,cy,0,cx,cy,cr);
+    cg.addColorStop(0,'rgba(0,0,0,0.5)');cg.addColorStop(.5,'rgba(0,0,0,0.2)');cg.addColorStop(1,'transparent');
+    ctx.fillStyle=cg;ctx.beginPath();ctx.arc(cx,cy,cr,0,Math.PI*2);ctx.fill();
+    // rim highlight
+    ctx.strokeStyle='rgba(100,80,40,0.25)';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.arc(cx,cy,cr*.7,0,Math.PI*2);ctx.stroke();
+  }
+
+  // if unconquered — alien fortification marks
+  if(!continent.conquered){
+    const threatColor=continent.threat==='FORTIFIED'?'rgba(192,48,16,0.55)':'rgba(200,116,40,0.4)';
+    for(let i=0;i<4;i++){
+      const fx=(Math.cos(seed*0.5+i*1.57)*0.38+0.5)*W;
+      const fy=(Math.sin(seed*0.8+i*1.57)*0.3+0.5)*H;
+      ctx.fillStyle=threatColor;
+      ctx.font='bold 14px monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText('⚠',fx,fy);
+    }
+    // fog of war vignette
+    const fog=ctx.createRadialGradient(W/2,H/2,H*.2,W/2,H/2,H*.9);
+    fog.addColorStop(0,'transparent');fog.addColorStop(1,'rgba(20,10,5,0.55)');
+    ctx.fillStyle=fog;ctx.fillRect(0,0,W,H);
+  }
+
+  // continent name stamp
+  ctx.font='900 11px Courier New';ctx.letterSpacing='3px';
+  ctx.textAlign='left';ctx.textBaseline='top';
+  ctx.fillStyle='rgba(200,116,40,0.5)';
+  ctx.fillText(continent.name.toUpperCase(), 10, 8);
+
+  // border
+  ctx.strokeStyle=continent.conquered?'rgba(90,138,60,0.4)':'rgba(192,48,16,0.35)';
+  ctx.lineWidth=1.5;ctx.strokeRect(0,0,W,H);
 }
 
 // ═══════════════════════════════════════════════
-//  HOME PLANET SCREEN
+//  RESOURCE BAR
+// ═══════════════════════════════════════════════
+function fmt(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':''+n}
+function resHTML(){
+  const r=state.res;
+  return `
+    <div class="res-badge" style="border-color:#3a4228;color:var(--rust)">⛏ ${fmt(r.metal)}</div>
+    <div class="res-badge" style="border-color:#3a4228;color:var(--mil)">🌾 ${fmt(r.food)}</div>
+    <div class="res-badge" style="border-color:#3a4228;color:#c8c4b0">👥 ${fmt(r.pop)}</div>
+    <div class="res-badge" style="border-color:#3a4228;color:#8888cc">⚛ ${fmt(r.research)}</div>
+    <div class="res-badge" style="border-color:#3a4228;color:#d0d040">⚡ ${fmt(r.excellorant)}</div>
+  `;
+}
+function renderResBar(){document.getElementById('resource-bar').innerHTML=resHTML();}
+function renderResBar2(){const el=document.getElementById('resource-bar-cont');if(el)el.innerHTML=resHTML();}
+
+// ═══════════════════════════════════════════════
+//  HOME SCREEN
 // ═══════════════════════════════════════════════
 function renderHome(){
-  renderResourceBar();
-  const cc = conqueredCount();
-  document.getElementById('planet-name-label').textContent = state.planet.name.toUpperCase();
-  document.getElementById('conquest-label').textContent = `${cc} / 5 Continents Conquered`;
-  document.getElementById('conquest-bar').style.width = `${cc/5*100}%`;
+  renderResBar();
+  const n=cc();
+  document.getElementById('planet-name-label').textContent=state.planet.name.toUpperCase();
+  document.getElementById('conquest-label').textContent=`${n}/5 CONTINENTS SECURED`;
 
-  // Draw home planet
-  const hpc = document.getElementById('home-planet');
-  drawPlanet(hpc, 39, 224, 240, 150, true);
+  // pips
+  const pips=document.getElementById('conquest-pips');
+  pips.innerHTML=state.planet.continents.map(c=>
+    `<div class="conquest-pip ${c.conquered?'done':'locked'}"></div>`
+  ).join('');
 
-  // Continent list
-  const list = document.getElementById('continent-list');
-  list.innerHTML = '';
-  state.planet.continents.forEach((cont, i) => {
-    const panelClass = cont.conquered ? 'panel' : (cont.threat==='Fortified'?'panel amber':'panel dim');
-    const icon = cont.conquered ? '✅' : (cont.threat==='Fortified'?'⚠️':'🔒');
-    const sub = cont.conquered ? 'Under your command' : `Alien presence: ${cont.threat}`;
-    const div = document.createElement('div');
-    div.className = 'list-row';
-    div.innerHTML = `<div class="${panelClass}" style="flex:1;cursor:pointer">
-      <div style="display:flex;align-items:center;gap:12px">
-        <span class="row-icon">${icon}</span>
-        <div class="row-text"><div class="row-title">${cont.name}</div><div class="row-sub">${sub}</div></div>
-        <span class="row-chevron">›</span>
+  // draw home planet
+  const hpc=document.getElementById('home-planet');
+  drawPlanet(hpc,[200,116,40],140,true);
+
+  // continent rows
+  const list=document.getElementById('continent-list');
+  list.innerHTML='';
+  state.planet.continents.forEach((cont,i)=>{
+    const div=document.createElement('div');
+    div.innerHTML=`<div class="panel ${cont.conquered?'mil':'blood'} riveted" style="cursor:pointer;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px">${cont.conquered?'✅':'💀'}</span>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:900;letter-spacing:1px;text-transform:uppercase">${cont.name}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${cont.conquered?`${cont.bldgs.length} structures active`:`THREAT LEVEL: ${cont.threat}`}</div>
+        </div>
+        <span style="color:var(--muted);font-size:18px">›</span>
       </div>
     </div>`;
-    div.onclick = () => openContinent(i);
+    div.onclick=()=>openContinent(i);
     list.appendChild(div);
   });
 
-  // Spaceport locked notice
-  const locked = document.getElementById('spaceport-locked');
-  if(spaceportUnlocked()){ locked.style.display='none'; }
-  else {
+  const locked=document.getElementById('spaceport-locked');
+  if(spUnlocked()){locked.style.display='none';}
+  else{
     locked.style.display='block';
-    locked.textContent = `Conquer ${3-cc} more continent${3-cc!==1?'s':''} to unlock the Spaceport and travel beyond ${state.planet.name}.`;
+    locked.innerHTML=`<span style="color:var(--blood);font-weight:900">// SPACEPORT LOCKED //</span><br>Secure ${3-n} more continent${3-n!==1?'s':''} to construct a Spaceport and launch into orbit.`;
   }
 }
 
@@ -407,141 +555,160 @@ function renderHome(){
 //  CONTINENT SCREEN
 // ═══════════════════════════════════════════════
 function openContinent(idx){
-  state.selectedContinent = idx;
-  const cont = state.planet.continents[idx];
-  document.getElementById('continent-title').textContent = cont.name.split('—')[0].trim().toUpperCase();
-  const body = document.getElementById('continent-body');
+  state.selCont=idx;
+  const cont=state.planet.continents[idx];
+
+  document.getElementById('continent-title').textContent=cont.name.toUpperCase();
+  document.getElementById('continent-status').textContent=cont.conquered?'SECURED':'HOSTILE TERRITORY';
+  renderResBar2();
+
+  // Draw terrain map
+  const mapCanvas=document.getElementById('continent-map');
+  const W=document.getElementById('continent-map-wrap').offsetWidth||360;
+  drawContinentMap(mapCanvas,cont,W);
+
+  const body=document.getElementById('continent-body');
   body.innerHTML='';
 
   if(cont.conquered){
-    const title = document.createElement('div');
-    title.className='section-title glow-cyan mb8';
-    title.textContent='Buildings';
-    body.appendChild(title);
-    cont.buildings.forEach(b => {
-      const info = BUILDINGS[b.type];
-      const div = document.createElement('div');
-      div.className='list-row';
-      div.innerHTML=`<div class="panel" style="flex:1;cursor:pointer">
-        <div style="display:flex;align-items:center;gap:12px">
-          <span class="row-icon">${info.icon}</span>
-          <div class="row-text">
-            <div class="row-title">${info.name}</div>
-            <div class="row-sub" style="color:var(--amber)">Level ${b.level}</div>
-          </div>
-          <span class="row-chevron">›</span>
-        </div>
-      </div>`;
-      div.onclick=()=>openBuilding(b,idx);
-      body.appendChild(div);
+    const gridTitle=document.createElement('div');
+    gridTitle.className='sec-label';gridTitle.textContent='Building Plots';
+    body.appendChild(gridTitle);
+
+    const grid=document.createElement('div');
+    grid.id='slot-grid';
+    body.appendChild(grid);
+
+    SLOT_ORDER.forEach(key=>{
+      const existing=cont.bldgs.find(b=>b.type===key);
+      const isSpaceport=key==='spaceport';
+      const isAvail=isSpaceport&&spUnlocked()&&!existing;
+      const info=BUILDINGS[key];
+      const slot=document.createElement('div');
+
+      if(existing){
+        slot.className='bslot occupied';
+        slot.innerHTML=`<div class="slot-icon">${info.icon}</div>
+          <div class="slot-name">${info.short}</div>
+          <div class="slot-level">LVL ${existing.level}</div>`;
+        slot.onclick=()=>openBuilding(existing,idx);
+      } else if(isAvail){
+        slot.className='bslot empty';
+        slot.style.borderTopColor='var(--mil)';
+        slot.innerHTML=`<div class="slot-icon">🚀</div>
+          <div class="slot-name" style="color:var(--mil)">BUILD<br>SPACEPORT</div>`;
+        slot.onclick=()=>buildSpaceport(idx);
+      } else if(isSpaceport){
+        slot.className='bslot locked';
+        slot.innerHTML=`<div class="slot-name" style="font-size:7px;color:var(--blood)">SPACEPORT<br>LOCKED</div>`;
+      } else {
+        slot.className='bslot empty';
+        slot.innerHTML=`<div class="slot-icon" style="font-size:14px;opacity:0.4">${info.icon}</div>
+          <div class="slot-name">${info.short}</div>`;
+        // shouldn't happen in starter state, but allow rebuilding
+        slot.onclick=()=>toast('// STRUCTURE OFFLINE //');
+      }
+      grid.appendChild(slot);
     });
-    // Add spaceport if unlocked and not already built
-    if(spaceportUnlocked() && !cont.buildings.find(b=>b.type==='spaceport')){
-      const info = BUILDINGS.spaceport;
-      const sp = document.createElement('div');
-      sp.className='list-row';
-      sp.innerHTML=`<div class="panel magenta" style="flex:1;cursor:pointer">
-        <div style="display:flex;align-items:center;gap:12px">
-          <span class="row-icon">${info.icon}</span>
-          <div class="row-text">
-            <div class="row-title">${info.name} <span style="font-size:11px;color:var(--magenta)">[AVAILABLE]</span></div>
-            <div class="row-sub">Build cost: 5,000 Metal · 2,500 Food</div>
-          </div>
-          <span class="row-chevron">›</span>
-        </div>
-      </div>`;
-      sp.onclick=()=>{
-        if(state.resources.metal>=5000&&state.resources.food>=2500){
-          state.resources.metal-=5000; state.resources.food-=2500;
-          cont.buildings.push({type:'spaceport',level:1});
-          toast('Spaceport constructed!'); renderHome(); openContinent(idx);
-        } else { toast('Not enough resources!'); }
-      };
-      body.appendChild(sp);
-    }
+
   } else {
-    const costMap = { Dormant:100, Guarded:500, Fortified:1200 };
-    const cost = costMap[cont.threat] || 500;
+    // enemy territory
+    const costMap={DORMANT:100,GUARDED:500,FORTIFIED:1200};
+    const cost=costMap[cont.threat]||500;
     body.innerHTML=`
-      <div class="planet-wrap"><canvas id="battle-canvas" width="100" height="100"></canvas></div>
-      <div class="panel amber">
-        <div style="font-size:16px;font-weight:800;color:var(--amber);margin-bottom:8px">⚠️ Alien Forces Detected</div>
-        <div class="small-muted mb12">Threat Level: <strong style="color:var(--amber)">${cont.threat}</strong></div>
-        <div class="small-muted mb12">Send your troops to clear ${cont.name}. Conquering this territory expands your buildable space${conqueredCount()===2?' — and will unlock the Spaceport':''}.</div>
-        <div class="small-muted mb12">Required Infantry: <strong style="color:var(--text)">${cost}</strong> &nbsp;|&nbsp; Available: <strong style="color:var(--cyan)">${state.resources.population}</strong></div>
-        <div class="center mt12">
-          <button class="gal-btn amber" onclick="launchInvasion(${idx},${cost})"><div class="gal-btn-inner">⚔️ Launch Invasion</div></button>
+      <div class="sec-label">Threat Assessment</div>
+      <div class="panel blood riveted">
+        <div style="font-size:14px;font-weight:900;color:var(--blood);letter-spacing:2px;margin-bottom:8px">// HOSTILE TERRITORY //</div>
+        <div class="small-muted mb8">Threat Level: <span style="color:var(--warn);font-weight:900">${cont.threat}</span></div>
+        <div class="small-muted mb8">Alien forces occupy all building plots. Conquer this territory to claim the land and erect structures.</div>
+        <div class="small-muted mb12">Required Troops: <span style="color:var(--text);font-weight:900">${cost} Infantry</span> &nbsp;|&nbsp; Available: <span style="color:var(--mil);font-weight:900">${fmt(state.res.pop)}</span></div>
+        <div class="center">
+          <button class="gal-btn blood" onclick="launchInvasion(${idx},${cost})"><div class="gal-btn-inner">⚔ Launch Invasion</div></button>
         </div>
       </div>`;
-    drawPlanet(document.getElementById('battle-canvas'),200,60,40,100,false);
   }
   showScreen('continent');
 }
 
-function launchInvasion(idx, cost){
-  if(state.resources.population < cost){
-    toast(`Need ${cost} troops — train more Infantry first!`); return;
-  }
-  state.resources.population -= cost;
-  state.planet.continents[idx].conquered = true;
-  state.planet.continents[idx].buildings = Object.keys(BUILDINGS)
-    .filter(k=>k!=='spaceport')
-    .map(k=>({type:k,level:1}));
-  toast(`${state.planet.continents[idx].name} conquered! 🎉`);
-  renderHome(); openContinent(idx);
+function buildSpaceport(idx){
+  const cont=state.planet.continents[idx];
+  if(state.res.metal<5000||state.res.food<2500){toast('// INSUFFICIENT RESOURCES //');return;}
+  state.res.metal-=5000;state.res.food-=2500;
+  cont.bldgs.push({type:'spaceport',level:1});
+  toast('// SPACEPORT CONSTRUCTED //');
+  renderHome();openContinent(idx);
+}
+
+function launchInvasion(idx,cost){
+  if(state.res.pop<cost){toast(`// NEED ${cost} TROOPS //`);return;}
+  state.res.pop-=cost;
+  const cont=state.planet.continents[idx];
+  cont.conquered=true;
+  cont.bldgs=SLOT_ORDER.filter(k=>k!=='spaceport').map(k=>({type:k,level:1}));
+  toast(`// ${cont.name.toUpperCase()} SECURED //`);
+  renderHome();openContinent(idx);
 }
 
 // ═══════════════════════════════════════════════
-//  BUILDING DETAIL SCREEN
+//  BUILDING DETAIL
 // ═══════════════════════════════════════════════
-function openBuilding(building, continentIdx){
-  state.selectedBuilding = building;
-  state.buildingFromContinent = continentIdx;
-  const info = BUILDINGS[building.type];
-  const upgradeCost = 100 * building.level * building.level;
+function openBuilding(bldg,contIdx){
+  state.selBldg=bldg;
+  const info=BUILDINGS[bldg.type];
+  const upgCost=100*bldg.level*bldg.level;
+  document.getElementById('building-screen-title').textContent=info.short;
+  document.getElementById('building-back-btn').onclick=()=>openContinent(contIdx);
+  const body=document.getElementById('building-body');
 
-  document.getElementById('building-screen-title').textContent = info.name.toUpperCase();
-  document.getElementById('building-back-btn').onclick = () => openContinent(continentIdx);
+  let rosterHTML='';
+  if(bldg.type==='barracks') rosterHTML=rosterSection('Trainable Units',TROOPS,'rust');
+  if(bldg.type==='spaceport') rosterHTML=rosterSection('Buildable Ships',SHIPS,'mil');
+  if(bldg.type==='researchCenter') rosterHTML=researchSection();
 
-  const body = document.getElementById('building-body');
   body.innerHTML=`
-    <div class="center" style="padding:20px 0 12px">
-      <div style="font-size:56px;filter:drop-shadow(0 0 12px var(--cyan))">${info.icon}</div>
-      <div style="font-size:20px;font-weight:900;letter-spacing:2px;text-shadow:0 0 8px var(--cyan);margin-top:8px">${info.name.toUpperCase()}</div>
-      <div style="font-size:14px;color:var(--amber);font-family:monospace;margin-top:4px">Level ${building.level}</div>
+    <div class="center" style="padding:18px 0 10px">
+      <div class="bdetail-icon">${info.icon}</div>
+      <div style="font-size:18px;font-weight:900;letter-spacing:3px;text-transform:uppercase;
+        color:var(--rust);text-shadow:0 0 8px rgba(200,116,40,0.5);margin-top:8px">${info.name.toUpperCase()}</div>
+      <div style="font-size:12px;color:var(--mil);font-family:monospace;margin-top:4px;letter-spacing:2px">LVL ${bldg.level}</div>
     </div>
-    <div class="panel mb12"><p class="small-muted">${info.summary}</p></div>
-    <div class="center mb12">
-      <button class="gal-btn cyan" onclick="upgradeBuilding()"><div class="gal-btn-inner">⬆ Upgrade — ${upgradeCost} Metal</div></button>
+    <div class="panel steel mb12"><p class="small-muted">${info.summary}</p></div>
+    <div class="panel rust mb12">
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;letter-spacing:1px">
+        <span>UPGRADE COST</span><span style="color:var(--rust)">⛏ ${upgCost} METAL</span>
+      </div>
+      <div class="prog-wrap mb8"><div class="prog-fill" style="background:var(--rust);width:${Math.min(100,(bldg.level/10)*100)}%"></div></div>
+      <div class="center"><button class="gal-btn rust" onclick="upgradeBuilding()"><div class="gal-btn-inner">⬆ Upgrade to Lvl ${bldg.level+1}</div></button></div>
     </div>
-    ${building.type==='barracks' ? renderRosterSection('TRAINABLE UNITS', TROOPS, 'magenta') : ''}
-    ${building.type==='spaceport' ? renderRosterSection('BUILDABLE SHIPS', SHIPS, 'cyan') : ''}
-    ${building.type==='researchCenter' ? renderResearchSection() : ''}
+    ${rosterHTML}
   `;
   showScreen('building');
 }
 
-function renderRosterSection(title, items, color){
-  return `<div class="section-title" style="color:var(--${color})">${title}</div>
+function rosterSection(title,items,color){
+  return `<div class="sec-label" style="${color==='mil'?'color:var(--mil);border-color:var(--mil)':''}">${title}</div>
     <div class="panel ${color} mb12">
       ${items.map(u=>`<div class="roster-row">
-        <span class="roster-icon">${u.icon}</span>
-        <div><div class="roster-name">${u.name}</div><div class="roster-role">${u.role}</div></div>
+        <span style="font-size:20px;width:28px">${u.icon}</span>
+        <div><div style="font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:1px">${u.name}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${u.role}</div></div>
       </div>`).join('')}
     </div>`;
 }
 
-function renderResearchSection(){
-  return `<div class="section-title" style="color:var(--magenta)">RESEARCH TREE — SHIPS</div>
-    <div class="panel magenta mb12">
+function researchSection(){
+  return `<div class="sec-label">Ship Research Tree</div>
+    <div class="panel mb12">
       ${RESEARCH.map((r,i)=>{
-        const done = state.researchDone.has(i);
-        const cost = (i+1)*200;
+        const done=state.researchDone.has(i);
         return `<div class="roster-row" style="align-items:center">
-          <span class="roster-icon">${r.icon}</span>
-          <div style="flex:1"><div class="roster-name">${r.name}</div><div class="roster-role">${r.desc}</div></div>
-          <button class="gal-btn ${done?'amber':'cyan'}" onclick="doResearch(${i},${cost})" style="flex-shrink:0">
-            <div class="gal-btn-inner" style="padding:5px 10px;font-size:11px">${done?'✓ Done':'Research'}</div>
+          <span style="font-size:18px;width:24px">${r.icon}</span>
+          <div style="flex:1">
+            <div style="font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:1px;${done?'color:var(--muted)':''}">${r.name}</div>
+            <div style="font-size:11px;color:var(--muted)">${r.desc} · Cost: ${r.cost} Research</div>
+          </div>
+          <button class="gal-btn ${done?'rust':'mil'}" onclick="doResearch(${i},${r.cost})" style="margin-left:8px">
+            <div class="gal-btn-inner" style="padding:5px 10px;font-size:10px">${done?'✓ DONE':'RESEARCH'}</div>
           </button>
         </div>`;
       }).join('')}
@@ -549,144 +716,97 @@ function renderResearchSection(){
 }
 
 function upgradeBuilding(){
-  const b = state.selectedBuilding;
-  const cost = 100 * b.level * b.level;
-  if(state.resources.metal < cost){ toast('Not enough Metal!'); return; }
-  state.resources.metal -= cost;
-  b.level++;
-  toast(`${BUILDINGS[b.type].name} upgraded to Level ${b.level}!`);
-  openBuilding(b, state.buildingFromContinent);
+  const b=state.selBldg;
+  const cost=100*b.level*b.level;
+  if(state.res.metal<cost){toast('// INSUFFICIENT METAL //');return;}
+  state.res.metal-=cost;b.level++;
+  toast(`// ${BUILDINGS[b.type].short} → LVL ${b.level} //`);
+  openBuilding(b,state.selCont);
 }
 
-function doResearch(idx, cost){
-  if(state.researchDone.has(idx)){ toast('Already researched!'); return; }
-  if(state.resources.research < cost){ toast(`Need ${cost} Research points!`); return; }
-  state.resources.research -= cost;
-  state.researchDone.add(idx);
-  toast(`${RESEARCH[idx].name} unlocked! 🔬`);
-  openBuilding(state.selectedBuilding, state.buildingFromContinent);
+function doResearch(idx,cost){
+  if(state.researchDone.has(idx)){toast('// ALREADY RESEARCHED //');return;}
+  if(state.res.research<cost){toast(`// NEED ${cost} RESEARCH PTS //`);return;}
+  state.res.research-=cost;state.researchDone.add(idx);
+  toast(`// ${RESEARCH[idx].name.toUpperCase()} UNLOCKED //`);
+  openBuilding(state.selBldg,state.selCont);
 }
 
 // ═══════════════════════════════════════════════
-//  SOLAR SYSTEM SCREEN
+//  SOLAR SYSTEM
 // ═══════════════════════════════════════════════
 function showSolarSystem(){
-  const body = document.getElementById('solar-body');
-  body.innerHTML = '';
+  const body=document.getElementById('solar-body');
+  body.innerHTML='';
 
-  // Sun
-  const sunWrap = document.createElement('div');
-  sunWrap.className='planet-wrap';
-  sunWrap.innerHTML='<canvas id="sun-canvas" width="70" height="70"></canvas>';
+  // sun
+  const sunWrap=document.createElement('div');sunWrap.className='planet-wrap';
+  sunWrap.innerHTML='<canvas id="sun-c" width="80" height="80" style="border-radius:50%"></canvas>';
   body.appendChild(sunWrap);
-  drawPlanet(document.createElement('canvas'),255,200,50,1,false); // dummy
-  setTimeout(()=>{
-    const sc = document.getElementById('sun-canvas');
-    if(sc){ drawPlanet(sc,255,200,50,70,false);
-      // add corona
-      const ctx=sc.getContext('2d');
-      const g=ctx.createRadialGradient(35,35,28,35,35,40);
-      g.addColorStop(0,'rgba(255,200,50,0.35)'); g.addColorStop(1,'transparent');
-      ctx.fillStyle=g; ctx.fillRect(0,0,70,70);
-    }
-  },10);
-  const sunLabel = document.createElement('div');
-  sunLabel.className='center mb12 small-muted';
-  sunLabel.innerHTML='<strong style="color:var(--amber)">☀ Korath Star</strong>';
-  body.appendChild(sunLabel);
+  const sunLbl=document.createElement('div');sunLbl.className='center mb12';
+  sunLbl.style.cssText='font-size:11px;letter-spacing:3px;color:var(--rust);text-transform:uppercase';
+  sunLbl.textContent='☀ Korath Star';body.appendChild(sunLbl);
+  setTimeout(()=>{const s=document.getElementById('sun-c');if(s)drawPlanet(s,[255,200,50],80,false);},10);
 
-  // Planets
-  state.solarSystem.forEach((planet, i) => {
-    const div = document.createElement('div');
-    const glow = planet.isHome ? 'var(--cyan)' : planet.isAgri ? 'var(--magenta)' : 'rgba(255,255,255,0.2)';
-    const panelClass = planet.isHome ? 'panel' : planet.isAgri ? 'panel magenta' : 'panel dim';
-    const desc = planet.isHome ? 'Home Planet' : planet.isAgri ? 'AgriWorld — abundant resources' : 'Minor colony opportunity';
-    div.innerHTML=`<div class="${panelClass}" style="cursor:pointer">
-      <div style="display:flex;align-items:center;gap:14px">
-        <canvas id="planet-mini-${i}" width="50" height="50" style="border-radius:50%;flex-shrink:0"></canvas>
+  state.solar.forEach((planet,i)=>{
+    const wrap=document.createElement('div');wrap.className='planet-row mb8';
+    const color=planet.isHome?'rust':planet.isAgri?'mil':'steel';
+    wrap.innerHTML=`<div class="panel ${color}" style="flex:1;cursor:pointer">
+      <div style="display:flex;align-items:center;gap:12px">
+        <canvas id="pm-${i}" width="54" height="54" style="border-radius:50%;flex-shrink:0"></canvas>
         <div style="flex:1">
-          <div class="row-title">${planet.name} ${planet.colonized?'<span style="font-size:11px;color:var(--cyan)">[COLONIZED]</span>':''}</div>
-          <div class="row-sub">${desc}</div>
+          <div style="font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:1px">${planet.name}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${planet.isHome?'HOME WORLD':planet.isAgri?'AGRIWORLD — RESOURCE RICH':'MINOR COLONY SITE'}</div>
+          ${planet.colonized?'<div style="font-size:10px;color:var(--mil);margin-top:2px;letter-spacing:1px">// COLONIZED //</div>':''}
         </div>
-        <span class="row-chevron">›</span>
+        <span style="color:var(--muted);font-size:18px">›</span>
       </div>
     </div>`;
-    div.onclick = () => openPlanetModal(i);
-    body.appendChild(div);
-    setTimeout(()=>{
-      const c=document.getElementById(`planet-mini-${i}`);
-      if(c){ const [r,g,b]=planet.color; drawPlanet(c,r,g,b,50,i===3); }
-    },10);
+    wrap.onclick=()=>openPlanetModal(i);
+    body.appendChild(wrap);
+    setTimeout(()=>{const c=document.getElementById(`pm-${i}`);if(c)drawPlanet(c,planet.col,54,i===3);},10);
   });
 
   // AgriWorld briefing
-  const brief = document.createElement('div');
-  brief.className='panel magenta mt12';
-  brief.innerHTML=`<div style="font-size:14px;font-weight:800;color:var(--magenta);margin-bottom:8px">🌿 AgriWorld Operations</div>
-    <p class="small-muted">Send Haulers loaded with Builders, Soldiers, and cargo to Verdant Expanse to establish resource collectors and farms. Aliens escalate their attacks the longer you hold ground there — keep your garrison strong or risk losing the outpost.</p>`;
+  const brief=document.createElement('div');brief.className='panel blood mt12';
+  brief.innerHTML=`<div class="sec-label" style="color:var(--warn);border-color:var(--warn)">// AgriWorld Alert //</div>
+    <p class="small-muted">Deploy Haulers carrying Builders, Soldiers, and cargo to Verdant Expanse to erect resource collectors and farms. <span style="color:var(--warn)">WARNING:</span> alien counterattacks escalate continuously the longer you hold ground there. Reinforce or risk total loss of the outpost.</p>`;
   body.appendChild(brief);
-
   showScreen('solar');
 }
 
 function openPlanetModal(idx){
-  const planet = state.solarSystem[idx];
-  document.getElementById('modal-title').textContent = planet.name.toUpperCase();
-  const cost = planet.isHome ? 0 : planet.isAgri ? 3000 : 1000;
+  const planet=state.solar[idx];
+  const cost=planet.isAgri?3000:1000;
+  document.getElementById('modal-title').textContent=planet.name;
   document.getElementById('modal-body').innerHTML=`
-    <div class="center mb12"><canvas id="modal-planet" width="100" height="100" style="border-radius:50%"></canvas></div>
-    <div class="panel mb12">
-      <div class="row-sub" style="font-size:13px;line-height:1.6">
-        ${planet.isHome ? 'Your home world. Expand across all 5 continents to grow your empire.' :
-          planet.isAgri ? 'Resource-rich AgriWorld. Establish outposts here but be prepared — alien attacks escalate continuously the longer you stay.' :
-          'A minor world suitable for a small colony that provides a trickle of resources.'}
-      </div>
-    </div>
-    ${!planet.colonized && !planet.isHome ? `<div class="center">
-      <button class="gal-btn cyan" onclick="colonizePlanet(${idx},${cost})"><div class="gal-btn-inner">🛸 Send Hauler (${cost} Metal)</div></button>
-    </div>` : `<div class="center small-muted">${planet.isHome?'Currently inhabited.':'Colony established.'}</div>`}
-  `;
-  setTimeout(()=>{
-    const c=document.getElementById('modal-planet');
-    if(c){ const [r,g,b]=planet.color; drawPlanet(c,r,g,b,100,idx===3); }
-  },10);
+    <div class="center mb12"><canvas id="modal-planet-c" width="100" height="100" style="border-radius:50%"></canvas></div>
+    <div class="panel steel mb12 small-muted">${planet.isHome?'Your home world. Expand across all 5 continents to grow your empire.':planet.isAgri?'Resource-rich AgriWorld. Establish outposts here but be prepared — alien attacks escalate continuously the longer you stay.':'A minor world suitable for a small colony providing a trickle of resources.'}</div>
+    ${!planet.colonized&&!planet.isHome?`<div class="center">
+      <button class="gal-btn rust" onclick="colonizePlanet(${idx},${cost})"><div class="gal-btn-inner">🛸 Deploy Hauler (${cost} Metal)</div></button>
+    </div>`:`<div class="center small-muted">${planet.isHome?'Currently inhabited.':'Colony established.'}</div>`}`;
+  setTimeout(()=>{const c=document.getElementById('modal-planet-c');if(c)drawPlanet(c,planet.col,100,idx===3);},10);
   document.getElementById('modal-overlay').classList.add('open');
 }
 
-function colonizePlanet(idx, cost){
-  if(!spaceportUnlocked()){ toast('Build a Spaceport first!'); closeModal(); return; }
-  if(state.resources.metal < cost){ toast(`Need ${cost} Metal!`); closeModal(); return; }
-  state.resources.metal -= cost;
-  state.solarSystem[idx].colonized = true;
-  toast(`Colony established on ${state.solarSystem[idx].name}! 🚀`);
-  closeModal();
-  showSolarSystem();
+function colonizePlanet(idx,cost){
+  if(!spUnlocked()){toast('// BUILD SPACEPORT FIRST //');closeModal();return;}
+  if(state.res.metal<cost){toast(`// NEED ${cost} METAL //`);closeModal();return;}
+  state.res.metal-=cost;state.solar[idx].colonized=true;
+  toast(`// ${state.solar[idx].name.toUpperCase()} COLONIZED //`);
+  closeModal();showSolarSystem();
 }
 
 // ═══════════════════════════════════════════════
-//  NAVIGATION
+//  NAVIGATION + TOAST
 // ═══════════════════════════════════════════════
-function showScreen(name){
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  document.getElementById(`screen-${name}`).classList.add('active');
-}
-function goHome(){ renderHome(); showScreen('home'); }
-function closeModal(){ document.getElementById('modal-overlay').classList.remove('open'); }
+function showScreen(n){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById('screen-'+n).classList.add('active');}
+function goHome(){renderHome();showScreen('home');}
+function closeModal(){document.getElementById('modal-overlay').classList.remove('open');}
+let _tt;
+function toast(msg){const el=document.getElementById('toast');clearTimeout(_tt);el.textContent=msg;el.style.opacity='1';_tt=setTimeout(()=>el.style.opacity='0',2600);}
 
-// ═══════════════════════════════════════════════
-//  TOAST
-// ═══════════════════════════════════════════════
-let toastTimer;
-function toast(msg){
-  const el = document.getElementById('toast');
-  clearTimeout(toastTimer);
-  el.textContent = msg; el.style.opacity='1';
-  toastTimer = setTimeout(()=>el.style.opacity='0', 2500);
-}
-
-// ═══════════════════════════════════════════════
-//  INIT
-// ═══════════════════════════════════════════════
+// ═══ INIT ═══
 renderHome();
 </script>
 </body>

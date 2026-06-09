@@ -2175,69 +2175,17 @@ function _svgClientToLocal(svg,cx,cy){
 
 // ── init ──
 function initGlobeView(){
-  const list=document.getElementById('continent-list');
-  if(!list) return;
-  list.innerHTML='';
-  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
-  svg.id='globe-view';
-  svg.style.cssText='width:100%;display:block;touch-action:manipulation';
-  list.appendChild(svg);
-  _svgEl=svg;
-  // defer first render so the element has layout dimensions
-  requestAnimationFrame(()=>renderGlobeView());
-  svg.addEventListener('click',_svgOnClick);
-  svg.addEventListener('touchstart',e=>{
-    if(e.touches.length>0){
-      _svgTouchStartX=e.touches[0].clientX;
-      _svgTouchStartY=e.touches[0].clientY;
-    }
-  },{passive:true});
-  svg.addEventListener('touchend',e=>{
-    if(!e.changedTouches.length) return;
-    const t=e.changedTouches[0];
-    const dx=t.clientX-_svgTouchStartX;
-    const dy=t.clientY-_svgTouchStartY;
-    // horizontal swipe → cycle selection
-    if(Math.abs(dx)>50 && Math.abs(dx)>Math.abs(dy)*1.5){
-      if(dx<0) state.selCont=(state.selCont+1)%5;
-      else state.selCont=(state.selCont+4)%5;
-      _svgSelectedIdx=state.selCont;
-      renderGlobeView();
-      return;
-    }
-    // tap — hit-test against stored polys using SVG coordinate space
-    if(!_svgEl) return;
-    const [lx,ly]=_svgClientToLocal(_svgEl,t.clientX,t.clientY);
-    let hit=-1;
-    for(let i=0;i<_svgPolys.length;i++){
-      if(_ptInPoly(lx,ly,_svgPolys[i])){ hit=i; break; }
-    }
-    if(hit>=0){
-      if(hit===_svgSelectedIdx){
-        // second tap on selected → navigate
-        openContinent(hit);
-      } else {
-        // first tap → select and highlight
-        _svgSelectedIdx=hit; state.selCont=hit;
-        renderGlobeView();
-      }
-    } else {
-      // tap on empty space → deselect
-      if(_svgSelectedIdx>=0){ _svgSelectedIdx=-1; renderGlobeView(); }
-    }
-  },{passive:true});
+  // defer so the screen is in layout and offsetWidth is valid
+  requestAnimationFrame(renderGlobeView);
 }
 
 function renderGlobeView(){
-  const svg=_svgEl;
-  if(!svg) return;
-  const parent=svg.parentElement;
-  // Use offsetWidth on the parent for reliable post-layout width
-  const W=Math.max(parent?parent.offsetWidth:0,280);
+  const list=document.getElementById('continent-list');
+  if(!list) return;
+
+  // measure container width before touching the DOM
+  const W=Math.max(list.offsetWidth,280);
   const H=Math.round(W*1.35);
-  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
-  svg.setAttribute('width',W);
-  svg.setAttribute('height',H);
 
   const conts=state.planet.continents;
   const mapH=H*0.78;
@@ -2247,7 +2195,6 @@ function renderGlobeView(){
 
   const layouts=_getContLayouts(pcx,pcy,pradius);
   const polys=layouts.map((l,i)=>_genContPoly(l.seed+conts[i].name,l.cx,l.cy,l.rx,l.ry,l.pts));
-  // cache for touch hit-testing
   _svgPolys=polys;
 
   // stars (static, seeded)
@@ -2272,11 +2219,11 @@ function renderGlobeView(){
     const fill=isConq?biome.hi:biome.base;
     const stroke=isConq?'#d4a832':'#c83010';
     const sw=isSel?3:1.5;
-    const filter=isSel?`filter="url(#sel-glow)"`:'';
+    const filt=isSel?'filter="url(#sel-glow)"':'';
     const [gcx,gcy]=_centroid(polys[i]);
     const shortName=cont.name.length>9?cont.name.slice(0,8)+'…':cont.name;
     const lc=isConq?'#f0d060':'#ffffff';
-    contSVG+=`<path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" ${filter} data-cont-idx="${i}" style="cursor:pointer"/>`;
+    contSVG+=`<path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" ${filt} data-cont-idx="${i}" style="cursor:pointer"/>`;
     contSVG+=`<text x="${gcx.toFixed(1)}" y="${gcy.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${lc}" font-size="8" font-weight="900" font-family="monospace" letter-spacing="1" style="pointer-events:none">${shortName.toUpperCase()}</text>`;
     if(isConq) contSVG+=`<text x="${gcx.toFixed(1)}" y="${(gcy+10).toFixed(1)}" text-anchor="middle" fill="#c8a020" font-size="7" font-family="monospace" style="pointer-events:none">SECURED</text>`;
   }
@@ -2286,7 +2233,14 @@ function renderGlobeView(){
   const planetName=(state.planet.name||'PLANET').toUpperCase();
   const footY=H*0.88;
 
-  svg.innerHTML=`
+  // Write the FULL <svg> tag into the container's innerHTML so the HTML
+  // parser handles SVG namespace correctly — setting innerHTML on an
+  // SVGElement itself is unreliable on iOS Safari.
+  list.innerHTML=`<svg id="globe-view"
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 ${W} ${H}"
+    width="${W}" height="${H}"
+    style="width:100%;display:block;touch-action:manipulation">
 <defs>
   <radialGradient id="space-bg" cx="50%" cy="42%" r="80%">
     <stop offset="0%" stop-color="#0e1420"/>
@@ -2313,7 +2267,38 @@ ${stars}
 <text x="${(W/2).toFixed(1)}" y="${footY.toFixed(1)}" text-anchor="middle" fill="#c85028" font-size="12" font-weight="900" font-family="monospace" letter-spacing="2">${planetName}</text>
 <text x="${(W/2).toFixed(1)}" y="${(footY+16).toFixed(1)}" text-anchor="middle" fill="#c8a020" font-size="10" font-family="monospace">${pips}</text>
 <text x="${(W/2).toFixed(1)}" y="${(H-6).toFixed(1)}" text-anchor="middle" fill="rgba(160,150,120,0.4)" font-size="9" font-family="monospace">TAP A CONTINENT TO SELECT</text>
-`;
+</svg>`;
+
+  // Re-acquire SVG element and attach event listeners after each render
+  _svgEl=document.getElementById('globe-view');
+  if(!_svgEl) return;
+  _svgEl.addEventListener('click',_svgOnClick);
+  _svgEl.addEventListener('touchstart',e=>{
+    if(e.touches.length>0){_svgTouchStartX=e.touches[0].clientX;_svgTouchStartY=e.touches[0].clientY;}
+  },{passive:true});
+  _svgEl.addEventListener('touchend',e=>{
+    if(!e.changedTouches.length) return;
+    const t=e.changedTouches[0];
+    const dx=t.clientX-_svgTouchStartX;
+    const dy=t.clientY-_svgTouchStartY;
+    if(Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)*1.5){
+      if(dx<0) state.selCont=(state.selCont+1)%5;
+      else state.selCont=(state.selCont+4)%5;
+      _svgSelectedIdx=state.selCont;
+      renderGlobeView();
+      return;
+    }
+    if(!_svgEl) return;
+    const [lx,ly]=_svgClientToLocal(_svgEl,t.clientX,t.clientY);
+    let hit=-1;
+    for(let i=0;i<_svgPolys.length;i++){if(_ptInPoly(lx,ly,_svgPolys[i])){hit=i;break;}}
+    if(hit>=0){
+      if(hit===_svgSelectedIdx){openContinent(hit);}
+      else{_svgSelectedIdx=hit;state.selCont=hit;renderGlobeView();}
+    } else {
+      if(_svgSelectedIdx>=0){_svgSelectedIdx=-1;renderGlobeView();}
+    }
+  },{passive:true});
 }
 
 function _svgOnClick(e){
@@ -2335,13 +2320,7 @@ function _svgOnClick(e){
 }
 
 function refreshGlobeView(){
-  // if _svgEl is stale (detached from DOM), re-acquire or bail
-  if(!_svgEl || !_svgEl.isConnected){
-    const el=document.getElementById('globe-view');
-    if(el && el.isConnected) _svgEl=el;
-    else { _svgEl=null; return; }
-  }
-  renderGlobeView();
+  if(document.getElementById('continent-list')) renderGlobeView();
 }
 
 // ── legacy canvas stubs kept for external callers ──

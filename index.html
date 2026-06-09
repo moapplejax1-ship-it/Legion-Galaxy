@@ -2048,14 +2048,7 @@ if(typeof initFleet==='function'){ initFleet(); startShipBuildInterval(); }
 
 (function(){
 
-// ── internal state ──
-let _canvas=null, _ctx=null, _rafId=null;
-let _touchStartX=0;
-let _hitRegions=[]; // {type, contIdx, x,y,w,h}
-let _selectedInfoIdx=-1; // which continent's info card is open (-1 = none)
 
-// pulse timing
-let _pulseT=0;
 
 // ── biome palette per continent index — vivid so they read against dark space ──
 const BIOME_COLORS=[
@@ -2143,738 +2136,180 @@ function _getContLayouts(pcx,pcy,pradius){
   ];
 }
 
+// ── SVG globe view state ──
+let _svgEl=null;
+let _svgSelectedIdx=-1;
+let _svgTouchStartX=0;
+
+// convert polygon points to smooth SVG cubic-bezier path (same Catmull-Rom as canvas version)
+function _polyToSVGPath(pts){
+  if(pts.length<3) return '';
+  const n=pts.length;
+  let d='';
+  for(let i=0;i<n;i++){
+    const p0=pts[(i-1+n)%n];
+    const p1=pts[i];
+    const p2=pts[(i+1)%n];
+    const p3=pts[(i+2)%n];
+    if(i===0) d+=`M${p1[0].toFixed(1)},${p1[1].toFixed(1)}`;
+    const cp1x=p1[0]+(p2[0]-p0[0])/6;
+    const cp1y=p1[1]+(p2[1]-p0[1])/6;
+    const cp2x=p2[0]-(p3[0]-p1[0])/6;
+    const cp2y=p2[1]-(p3[1]-p1[1])/6;
+    d+=` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+  }
+  return d+' Z';
+}
+
 // ── init ──
 function initGlobeView(){
   const list=document.getElementById('continent-list');
   if(!list) return;
   list.innerHTML='';
-  let c=document.getElementById('globe-view');
-  if(!c){
-    c=document.createElement('canvas');
-    c.id='globe-view';
-    c.style.width='100%';
-    c.style.display='block';
-    c.style.cursor='pointer';
-    list.appendChild(c);
-  }
-  _canvas=c;
-  _ctx=c.getContext('2d');
-
-  _resizeCanvas();
-
-  c.addEventListener('click',_onClick);
-  c.addEventListener('touchstart',_onTouchStart,{passive:true});
-  c.addEventListener('touchend',_onTouchEnd,{passive:true});
-
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.id='globe-view';
+  svg.style.cssText='width:100%;display:block;touch-action:manipulation';
+  list.appendChild(svg);
+  _svgEl=svg;
   renderGlobeView();
-  _startLoop();
-}
-
-function _resizeCanvas(){
-  if(!_canvas) return;
-  const parent=_canvas.parentElement;
-  const w=Math.max(parent?parent.clientWidth:0,280);
-  _canvas.width=w;
-  _canvas.height=Math.round(w*1.35);
-}
-
-// ── animation loop ──
-function _startLoop(){
-  if(_rafId) return;
-  function loop(){
-    const el=document.getElementById('globe-view');
-    if(!el){_rafId=null;return;}
-    const homeScreen=document.getElementById('screen-home');
-    if(homeScreen && homeScreen.classList.contains('active')){
+  svg.addEventListener('click',_svgOnClick);
+  svg.addEventListener('touchstart',e=>{if(e.touches.length>0)_svgTouchStartX=e.touches[0].clientX;},{passive:true});
+  svg.addEventListener('touchend',e=>{
+    if(!e.changedTouches.length) return;
+    const dx=e.changedTouches[0].clientX-_svgTouchStartX;
+    if(Math.abs(dx)>50){
+      if(dx<0) state.selCont=(state.selCont+1)%5;
+      else state.selCont=(state.selCont+4)%5;
+      _svgSelectedIdx=state.selCont;
+      renderGlobeView();
+      return;
+    }
+    // treat as tap — SVG click fires on desktop but not always on iOS, so mirror it
+    const t=e.changedTouches[0];
+    const el=document.elementFromPoint(t.clientX,t.clientY);
+    if(el && el.hasAttribute('data-cont-idx')){
+      const idx=parseInt(el.getAttribute('data-cont-idx'));
+      _svgSelectedIdx=idx; state.selCont=idx;
       renderGlobeView();
     }
-    _rafId=requestAnimationFrame(loop);
-  }
-  _rafId=requestAnimationFrame(loop);
+  },{passive:true});
 }
 
-// ── main render ──
 function renderGlobeView(){
-  if(!_canvas||!_ctx) return;
-  _resizeCanvas();
-  const c=_canvas, ctx=_ctx;
-  const W=c.width, H=c.height;
-  const now=Date.now();
-  _pulseT=now;
+  const svg=_svgEl;
+  if(!svg) return;
+  const parent=svg.parentElement;
+  const W=Math.max(parent?parent.clientWidth:0,280);
+  const H=Math.round(W*1.35);
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  svg.setAttribute('width',W);
+  svg.setAttribute('height',H);
 
-  ctx.clearRect(0,0,W,H);
-  _hitRegions=[];
-
-  // ── space background ──
-  const bgGrad=ctx.createRadialGradient(W/2,H*0.42,0,W/2,H*0.42,W*0.8);
-  bgGrad.addColorStop(0,'#0e1420');
-  bgGrad.addColorStop(0.6,'#070b14');
-  bgGrad.addColorStop(1,'#020408');
-  ctx.fillStyle=bgGrad;
-  ctx.fillRect(0,0,W,H);
-
-  _drawStars(ctx,W,H,now);
-
-  // ── planet area: use top 80% of canvas ──
+  const conts=state.planet.continents;
   const mapH=H*0.78;
   const pradius=Math.min(W,mapH)*0.44;
   const pcx=W/2;
   const pcy=mapH*0.48;
 
-  _drawPlanet(ctx,pcx,pcy,pradius,now,W,H);
-
-  // ── continents ──
-  const conts=state.planet.continents;
   const layouts=_getContLayouts(pcx,pcy,pradius);
-  const polys=layouts.map((l,i)=>_genContPoly(l.seed+conts[i].name, l.cx, l.cy, l.rx, l.ry, l.pts));
+  const polys=layouts.map((l,i)=>_genContPoly(l.seed+conts[i].name,l.cx,l.cy,l.rx,l.ry,l.pts));
 
-  // draw ocean waves inside planet disk (behind continents)
-  _drawOceanWaves(ctx,pcx,pcy,pradius,now);
+  // stars (static, seeded)
+  const rng=mkRng(42);
+  let stars='';
+  for(let i=0;i<80;i++){
+    const sx=(rng()*W).toFixed(1);
+    const sy=(rng()*H).toFixed(1);
+    const r=(0.4+rng()*1.3).toFixed(1);
+    const op=(0.35+rng()*0.55).toFixed(2);
+    stars+=`<circle cx="${sx}" cy="${sy}" r="${r}" fill="rgba(255,255,230,${op})"/>`;
+  }
 
-  // draw each continent
+  // continents
+  let contSVG='';
   for(let i=0;i<5;i++){
     const cont=conts[i];
-    const poly=polys[i];
-    const isSelected=(i===state.selCont);
-    _drawContinent(ctx,cont,poly,i,isSelected,now);
+    const biome=BIOME_COLORS[i%BIOME_COLORS.length];
+    const d=_polyToSVGPath(polys[i]);
+    const isSel=(i===_svgSelectedIdx);
+    const isConq=cont.conquered;
+    const fill=isConq?biome.hi:biome.base;
+    const stroke=isConq?'#d4a832':'#c83010';
+    const sw=isSel?3:1.5;
+    const filter=isSel?`filter="url(#sel-glow)"`:'';
+    const [gcx,gcy]=_centroid(polys[i]);
+    const shortName=cont.name.length>9?cont.name.slice(0,8)+'…':cont.name;
+    const lc=isConq?'#f0d060':'#ffffff';
+    contSVG+=`<path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" ${filter} data-cont-idx="${i}" style="cursor:pointer"/>`;
+    contSVG+=`<text x="${gcx.toFixed(1)}" y="${gcy.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="${lc}" font-size="8" font-weight="900" font-family="monospace" letter-spacing="1" style="pointer-events:none">${shortName.toUpperCase()}</text>`;
+    if(isConq) contSVG+=`<text x="${gcx.toFixed(1)}" y="${(gcy+10).toFixed(1)}" text-anchor="middle" fill="#c8a020" font-size="7" font-family="monospace" style="pointer-events:none">SECURED</text>`;
   }
 
-  // ── orbital elements ──
-  _drawOrbitalElements(ctx,pcx,pcy,pradius,now);
+  const conqN=conts.filter(c=>c.conquered).length;
+  const pips=Array.from({length:5},(_,i)=>i<conqN?'◆':'◇').join(' ');
+  const planetName=(state.planet.name||'PLANET').toUpperCase();
+  const footY=H*0.88;
 
-  // ── planet name + conquest status (top overlay) ──
-  _drawPlanetHeader(ctx,W,H);
-
-  // ── info card ──
-  const infoIdx=_selectedInfoIdx;
-  if(infoIdx>=0 && infoIdx<5){
-    _drawInfoCard(ctx,conts[infoIdx],infoIdx,W,H);
-  } else {
-    _drawHint(ctx,W,H);
-  }
+  svg.innerHTML=`
+<defs>
+  <radialGradient id="space-bg" cx="50%" cy="42%" r="80%">
+    <stop offset="0%" stop-color="#0e1420"/>
+    <stop offset="70%" stop-color="#070b14"/>
+    <stop offset="100%" stop-color="#020408"/>
+  </radialGradient>
+  <radialGradient id="ocean-rg" cx="40%" cy="38%" r="68%">
+    <stop offset="0%" stop-color="#2080b8"/>
+    <stop offset="55%" stop-color="#0e4870"/>
+    <stop offset="100%" stop-color="#061828"/>
+  </radialGradient>
+  <filter id="sel-glow" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur"/>
+    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <clipPath id="planet-clip"><circle cx="${pcx.toFixed(1)}" cy="${pcy.toFixed(1)}" r="${pradius.toFixed(1)}"/></clipPath>
+</defs>
+<rect width="${W}" height="${H}" fill="url(#space-bg)"/>
+${stars}
+<circle cx="${pcx.toFixed(1)}" cy="${pcy.toFixed(1)}" r="${(pradius*1.1).toFixed(1)}" fill="none" stroke="rgba(60,130,255,0.15)" stroke-width="${(pradius*0.06).toFixed(1)}"/>
+<circle cx="${pcx.toFixed(1)}" cy="${pcy.toFixed(1)}" r="${pradius.toFixed(1)}" fill="url(#ocean-rg)" stroke="rgba(80,160,255,0.6)" stroke-width="2"/>
+<g clip-path="url(#planet-clip)">${contSVG}</g>
+<circle cx="${pcx.toFixed(1)}" cy="${pcy.toFixed(1)}" r="${pradius.toFixed(1)}" fill="none" stroke="rgba(0,0,0,0.4)" stroke-width="${(pradius*0.09).toFixed(1)}"/>
+<text x="${(W/2).toFixed(1)}" y="${footY.toFixed(1)}" text-anchor="middle" fill="#c85028" font-size="12" font-weight="900" font-family="monospace" letter-spacing="2">${planetName}</text>
+<text x="${(W/2).toFixed(1)}" y="${(footY+16).toFixed(1)}" text-anchor="middle" fill="#c8a020" font-size="10" font-family="monospace">${pips}</text>
+<text x="${(W/2).toFixed(1)}" y="${(H-6).toFixed(1)}" text-anchor="middle" fill="rgba(160,150,120,0.4)" font-size="9" font-family="monospace">TAP A CONTINENT TO SELECT</text>
+`;
 }
 
-function _drawPlanetHeader(ctx,W,H){
-  const n=state.planet.continents.filter(c=>c.conquered).length;
-  ctx.save();
-  // planet name
-  ctx.font='bold 15px monospace';
-  ctx.textAlign='center';ctx.textBaseline='top';
-  ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=8;
-  ctx.fillStyle='#e8b840';
-  ctx.fillText(state.planet.name.toUpperCase(),W/2,8);
-  // conquest bar
-  ctx.font='10px monospace';
-  ctx.fillStyle='rgba(200,180,120,0.75)';
-  ctx.fillText(n+'/5 CONTINENTS SECURED',W/2,26);
-  ctx.shadowBlur=0;
-  // pip dots
-  const pipW=8,pipGap=5,totalW=(5*pipW+4*pipGap);
-  const px0=W/2-totalW/2, py0=40;
-  state.planet.continents.forEach((c,i)=>{
-    ctx.beginPath();
-    ctx.arc(px0+i*(pipW+pipGap)+pipW/2, py0+pipW/2, pipW/2, 0, Math.PI*2);
-    ctx.fillStyle=c.conquered?'#60c850':'rgba(255,255,255,0.15)';
-    ctx.fill();
-    if(c.conquered){ctx.strokeStyle='#40a030';ctx.lineWidth=1;ctx.stroke();}
-  });
-  ctx.restore();
-}
-
-// ── planet disk ──
-function _drawPlanet(ctx,pcx,pcy,pradius,now,W,H){
-  // atmosphere outer glow (simple arc, no gradient+clip)
-  ctx.beginPath();ctx.arc(pcx,pcy,pradius*1.18,0,Math.PI*2);
-  ctx.fillStyle='rgba(40,90,180,0.12)';ctx.fill();
-
-  // ocean base — flat solid fill clipped to circle
-  ctx.beginPath();ctx.arc(pcx,pcy,pradius,0,Math.PI*2);
-  ctx.fillStyle='#1a5878';ctx.fill();
-
-  // subtle dark limb shading via second arc stroke
-  ctx.beginPath();ctx.arc(pcx,pcy,pradius,0,Math.PI*2);
-  ctx.strokeStyle='rgba(0,0,0,0.45)';
-  ctx.lineWidth=pradius*0.12;ctx.stroke();
-
-  // bright highlight arc (top-left quadrant) for sphere feel
-  ctx.beginPath();ctx.arc(pcx-pradius*0.18,pcy-pradius*0.18,pradius*0.35,0,Math.PI*2);
-  ctx.fillStyle='rgba(80,160,220,0.09)';ctx.fill();
-
-  // planet border
-  ctx.beginPath();ctx.arc(pcx,pcy,pradius,0,Math.PI*2);
-  ctx.strokeStyle='rgba(80,160,255,0.5)';
-  ctx.lineWidth=1.5;ctx.stroke();
-
-  // atmosphere ring
-  ctx.beginPath();ctx.arc(pcx,pcy,pradius*1.015,0,Math.PI*2);
-  ctx.strokeStyle='rgba(100,180,255,0.22)';
-  ctx.lineWidth=pradius*0.022;ctx.stroke();
-}
-
-// ── ocean waves ──
-function _drawOceanWaves(ctx,pcx,pcy,pradius,now){
-  ctx.save();
-  ctx.beginPath();ctx.arc(pcx,pcy,pradius*0.99,0,Math.PI*2);ctx.clip();
-  ctx.strokeStyle='rgba(20,80,120,0.18)';
-  ctx.lineWidth=0.8;
-  const waveAmp=pradius*0.008;
-  const waveLen=pradius*0.22;
-  const waveOff=(now*0.00006)%1;
-  for(let row=-1;row<Math.ceil(pradius*2/14)+1;row++){
-    const wy=pcy-pradius+row*14;
-    ctx.beginPath();
-    for(let wx=pcx-pradius;wx<=pcx+pradius;wx+=2){
-      const sy=wy+Math.sin((wx/waveLen+waveOff)*Math.PI*2)*waveAmp;
-      if(wx===pcx-pradius) ctx.moveTo(wx,sy); else ctx.lineTo(wx,sy);
-    }
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-// ── draw a single continent region ──
-function _drawContinent(ctx,cont,poly,idx,isSelected,now){
-  const biome=BIOME_COLORS[idx%BIOME_COLORS.length];
-  const pulse=0.6+0.4*Math.sin(now*0.0025+idx);
-
-  // terrain fill gradient
-  ctx.save();
-  _polyPath(ctx,poly);
-  ctx.clip();
-
-  const [gcx,gcy]=_centroid(poly);
-  const maxR=Math.max(...poly.map(p=>Math.hypot(p[0]-gcx,p[1]-gcy)))*1.2;
-  const terrGrad=ctx.createRadialGradient(gcx-maxR*0.2,gcy-maxR*0.2,maxR*0.05,gcx,gcy,maxR);
-  terrGrad.addColorStop(0,biome.hi);
-  terrGrad.addColorStop(0.5,biome.mid);
-  terrGrad.addColorStop(1,biome.base);
-  ctx.fillStyle=terrGrad;
-  ctx.fill();
-
-  // terrain noise overlay (subtle)
-  _drawTerrainNoise(ctx,cont,poly,gcx,gcy,maxR,idx);
-
-  // conquered: grid + buildings  /  unconquered: stipple + threat
-  if(cont.conquered){
-    _drawConqGrid(ctx,poly,gcx,gcy,maxR);
-    _drawBuildingIcons(ctx,cont,poly,gcx,gcy,maxR);
-    // gold flag dot in corner area
-    _drawFlagIndicator(ctx,poly,gcx,gcy);
-  } else {
-    _drawStipple(ctx,poly,gcx,gcy,maxR,idx,now);
-    _drawThreatIndicator(ctx,cont,poly,gcx,gcy,now);
-  }
-
-  ctx.restore(); // clip
-
-  // border glow
-  _polyPath(ctx,poly);
-  const borderPulse=isSelected?1.0:0.55+0.25*Math.sin(now*0.003+idx*1.7);
-  if(cont.conquered){
-    ctx.strokeStyle=`rgba(212,168,50,${isSelected?0.95*borderPulse:0.55})`;
-    ctx.lineWidth=isSelected?2.8:1.2;
-    if(isSelected){
-      ctx.shadowColor='rgba(212,168,50,0.7)';
-      ctx.shadowBlur=10;
-    }
-  } else {
-    ctx.strokeStyle=`rgba(200,48,16,${0.6+0.4*pulse})`;
-    ctx.lineWidth=isSelected?2.8:1.5;
-    if(!isSelected){
-      ctx.shadowColor=`rgba(180,30,10,${0.4*pulse})`;
-      ctx.shadowBlur=6;
-    } else {
-      ctx.shadowColor='rgba(220,60,20,0.9)';
-      ctx.shadowBlur=14*pulse;
-    }
-  }
-  ctx.stroke();
-  ctx.shadowBlur=0;
-
-  ctx.restore();
-
-  // continent name label
-  _drawContLabel(ctx,cont,poly,gcx,gcy,isSelected);
-
-  // hit region (bounding box of polygon)
-  const xs=poly.map(p=>p[0]), ys=poly.map(p=>p[1]);
-  const bx=Math.min(...xs), by=Math.min(...ys);
-  const bw=Math.max(...xs)-bx, bh=Math.max(...ys)-by;
-  _hitRegions.push({type:'continent',contIdx:idx,poly,x:bx,y:by,w:bw,h:bh});
-}
-
-function _drawTerrainNoise(ctx,cont,poly,gcx,gcy,maxR,idx){
-  const rng=mkRng(strSeed(cont.name+'terr'));
-  ctx.globalAlpha=0.13;
-  for(let i=0;i<28;i++){
-    const a=rng()*Math.PI*2;
-    const r=rng()*maxR*0.85;
-    const px=gcx+Math.cos(a)*r;
-    const py=gcy+Math.sin(a)*r;
-    const sz=maxR*0.06+rng()*maxR*0.10;
-    const bm=BIOME_COLORS[idx%BIOME_COLORS.length];
-    ctx.fillStyle=rng()<0.5?bm.base:bm.hi;
-    ctx.beginPath();ctx.arc(px,py,sz,0,Math.PI*2);ctx.fill();
-  }
-  ctx.globalAlpha=1;
-}
-
-function _drawConqGrid(ctx,poly,gcx,gcy,maxR){
-  ctx.save();
-  _polyPath(ctx,poly);ctx.clip();
-  const step=maxR*0.18;
-  ctx.strokeStyle='rgba(255,255,255,0.06)';
-  ctx.lineWidth=0.5;
-  const bx=gcx-maxR*1.1, by=gcy-maxR*1.1;
-  const ex=gcx+maxR*1.1, ey=gcy+maxR*1.1;
-  for(let x=bx;x<ex;x+=step){
-    ctx.beginPath();ctx.moveTo(x,by);ctx.lineTo(x,ey);ctx.stroke();
-  }
-  for(let y=by;y<ey;y+=step){
-    ctx.beginPath();ctx.moveTo(bx,y);ctx.lineTo(ex,y);ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function _drawBuildingIcons(ctx,cont,poly,gcx,gcy,maxR){
-  if(!cont.bldgs||!cont.bldgs.length) return;
-  // count by type
-  const counts={};
-  for(const b of cont.bldgs) counts[b.type]=(counts[b.type]||0)+1;
-  // sorted by priority
-  const sorted=BLDG_PRIORITY.filter(t=>counts[t]).slice(0,6);
-  if(!sorted.length) return;
-
-  // place icons in a small cluster near centroid offset slightly
-  const rng=mkRng(strSeed(cont.name+'bicons'));
-  ctx.font=`${Math.max(9,maxR*0.14)}px serif`;
-  ctx.textAlign='center';
-  ctx.textBaseline='middle';
-  const spread=maxR*0.45;
-  sorted.forEach((type,i)=>{
-    const angle=((i/sorted.length)*Math.PI*2)-Math.PI/2;
-    const r=spread*(0.3+rng()*0.5);
-    const ix=gcx+Math.cos(angle)*r;
-    const iy=gcy+Math.sin(angle)*r;
-    ctx.globalAlpha=0.85;
-    ctx.fillText((BLDG_ICONS[type]||'?'),ix,iy);
-    if(counts[type]>1){
-      ctx.save();
-      ctx.font=`bold ${Math.max(6,maxR*0.09)}px monospace`;
-      ctx.fillStyle='#d4a832';
-      ctx.globalAlpha=1;
-      ctx.fillText('×'+counts[type],ix+maxR*0.1,iy-maxR*0.1);
-      ctx.restore();
-    }
-  });
-  ctx.globalAlpha=1;
-}
-
-function _drawFlagIndicator(ctx,poly,gcx,gcy){
-  // small gold star in upper-right area of centroid
-  const star_x=gcx+_polyRadius(poly,gcx,gcy,-Math.PI/4)*0.55;
-  const star_y=gcy+_polyRadius(poly,gcx,gcy,-Math.PI/4)*0.55*Math.tan(-Math.PI/4);
-  // just draw a gold ★
-  ctx.save();
-  ctx.font='bold 10px serif';
-  ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillStyle='#d4a832';
-  ctx.shadowColor='rgba(212,168,50,0.8)';ctx.shadowBlur=4;
-  ctx.fillText('★',gcx+_estimateOffsetX(poly,gcx,0.5),gcy+_estimateOffsetY(poly,gcy,-0.5));
-  ctx.shadowBlur=0;
-  ctx.restore();
-}
-
-function _estimateOffsetX(poly,gcx,frac){
-  const xs=poly.map(p=>p[0]);
-  const right=Math.max(...xs);
-  return (right-gcx)*frac;
-}
-function _estimateOffsetY(poly,gcy,frac){
-  const ys=poly.map(p=>p[1]);
-  const top=Math.min(...ys);
-  return (gcy-top)*frac;
-}
-function _polyRadius(poly,gcx,gcy,angle){
-  return Math.max(...poly.map(p=>Math.hypot(p[0]-gcx,p[1]-gcy)));
-}
-
-function _drawStipple(ctx,poly,gcx,gcy,maxR,idx,now){
-  const rng=mkRng(strSeed('stipple'+idx));
-  ctx.save();
-  _polyPath(ctx,poly);ctx.clip();
-  const pulse=0.5+0.5*Math.sin(now*0.003+idx);
-  for(let i=0;i<18;i++){
-    const a=rng()*Math.PI*2;
-    const r=rng()*maxR*0.75;
-    const px=gcx+Math.cos(a)*r;
-    const py=gcy+Math.sin(a)*r;
-    ctx.fillStyle=`rgba(180,30,10,${0.18+0.12*pulse})`;
-    ctx.beginPath();ctx.arc(px,py,1.5+rng()*2,0,Math.PI*2);ctx.fill();
-  }
-  ctx.restore();
-  // red vignette
-  ctx.save();
-  _polyPath(ctx,poly);ctx.clip();
-  const vgGrad=ctx.createRadialGradient(gcx,gcy,maxR*0.1,gcx,gcy,maxR);
-  vgGrad.addColorStop(0,'rgba(180,30,10,0)');
-  vgGrad.addColorStop(1,`rgba(180,30,10,${0.20+0.12*pulse})`);
-  ctx.fillStyle=vgGrad;ctx.fill();
-  ctx.restore();
-}
-
-function _drawThreatIndicator(ctx,cont,poly,gcx,gcy,now){
-  const aliens=cont.aliens||{infantry:0,tanks:0,cavalry:0};
-  const total=aliens.infantry+aliens.tanks+aliens.cavalry;
-  ctx.save();
-  ctx.font=`bold ${Math.max(6,Math.min(9,_polyMaxR(poly,gcx,gcy)*0.13))}px monospace`;
-  ctx.textAlign='center';ctx.textBaseline='middle';
-  const pulse=0.7+0.3*Math.sin(now*0.004+1);
-  ctx.fillStyle=`rgba(255,80,40,${pulse})`;
-  ctx.shadowColor='rgba(200,20,0,0.6)';ctx.shadowBlur=4;
-  const threatLbl=cont.threat||'HOSTILE';
-  ctx.fillText('☠ '+threatLbl,gcx,gcy+_polyMaxR(poly,gcx,gcy)*0.35);
-  ctx.shadowBlur=0;
-  // skull
-  ctx.font=`${Math.max(10,_polyMaxR(poly,gcx,gcy)*0.18)}px serif`;
-  ctx.fillStyle=`rgba(255,60,30,${0.55+0.3*pulse})`;
-  ctx.fillText('💀',gcx,gcy-_polyMaxR(poly,gcx,gcy)*0.1);
-  ctx.restore();
-}
-
-function _polyMaxR(poly,gcx,gcy){
-  return Math.max(...poly.map(p=>Math.hypot(p[0]-gcx,p[1]-gcy)));
-}
-
-function _drawContLabel(ctx,cont,poly,gcx,gcy,isSelected){
-  const maxR=_polyMaxR(poly,gcx,gcy);
-  const fontSize=Math.max(7,Math.min(11,maxR*0.20));
-  ctx.save();
-  ctx.font=`bold ${fontSize}px monospace`;
-  ctx.textAlign='center';ctx.textBaseline='middle';
-  // shadow for readability
-  ctx.shadowColor='rgba(0,0,0,0.85)';ctx.shadowBlur=4;
-  ctx.fillStyle=isSelected?'#d4a832':(cont.conquered?'#b8c8a0':'#c87878');
-  ctx.fillText(cont.name.toUpperCase(),gcx,gcy+maxR*0.62);
-  ctx.shadowBlur=0;
-  // status sub-label
-  ctx.font=`${Math.max(6,fontSize*0.78)}px monospace`;
-  ctx.fillStyle=cont.conquered?'rgba(80,180,60,0.9)':'rgba(220,60,30,0.9)';
-  ctx.fillText(cont.conquered?'SECURED':cont.threat,gcx,gcy+maxR*0.62+fontSize+2);
-  ctx.restore();
-}
-
-// ── orbital debris dots ──
-function _drawOrbitalElements(ctx,pcx,pcy,pradius,now){
-  ctx.save();
-  const orbitR=pradius*1.10;
-  const orbitR2=pradius*1.22;
-  const dots=[
-    {speed:0.00018,off:0,   size:2.2, alpha:0.6,  r:orbitR},
-    {speed:0.00011,off:2.1, size:1.6, alpha:0.45, r:orbitR2},
-    {speed:0.00025,off:4.5, size:1.4, alpha:0.5,  r:orbitR},
-    {speed:0.00008,off:1.0, size:2.8, alpha:0.35, r:orbitR2},
-  ];
-  for(const d of dots){
-    const angle=(now*d.speed+d.off)%(Math.PI*2);
-    const dx=pcx+Math.cos(angle)*d.r;
-    const dy=pcy+Math.sin(angle)*d.r*0.38; // elliptical orbit
-    ctx.beginPath();ctx.arc(dx,dy,d.size,0,Math.PI*2);
-    ctx.fillStyle=`rgba(160,200,255,${d.alpha})`;
-    ctx.fill();
-    // tiny trail
-    ctx.beginPath();
-    ctx.arc(pcx+Math.cos(angle-0.08)*d.r,pcy+Math.sin(angle-0.08)*d.r*0.38,d.size*0.5,0,Math.PI*2);
-    ctx.fillStyle=`rgba(120,170,230,${d.alpha*0.35})`;
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-// ── stars ──
-function _drawStars(ctx,W,H,now){
-  const rng=mkRng(42);
-  const count=80;
-  for(let i=0;i<count;i++){
-    const sx=rng()*W;
-    const sy=rng()*H;
-    const twinkle=0.35+0.65*Math.abs(Math.sin(now*0.0007+i*2.3));
-    const r=0.4+rng()*1.3;
-    ctx.beginPath();ctx.arc(sx,sy,r,0,Math.PI*2);
-    ctx.fillStyle=`rgba(255,255,230,${twinkle*0.75})`;
-    ctx.fill();
-  }
-}
-
-// ── info card at bottom ──
-function _drawInfoCard(ctx,cont,idx,W,H){
-  const cardH=H*0.215;
-  const cardY=H-cardH-4;
-  const cardX=8;
-  const cardW=W-16;
-  const now=_pulseT;
-  const biome=BIOME_COLORS[idx%BIOME_COLORS.length];
-
-  // card background
-  ctx.save();
-  ctx.shadowColor='rgba(0,0,0,0.7)';ctx.shadowBlur=14;
-  const bgGrad=ctx.createLinearGradient(cardX,cardY,cardX,cardY+cardH);
-  bgGrad.addColorStop(0,'rgba(10,12,16,0.97)');
-  bgGrad.addColorStop(1,'rgba(16,20,28,0.97)');
-  ctx.fillStyle=bgGrad;
-  _roundRect(ctx,cardX,cardY,cardW,cardH,8);
-  ctx.fill();
-  ctx.shadowBlur=0;
-
-  // top accent bar
-  ctx.fillStyle=cont.conquered?'#c8a020':'#8b1a1a';
-  ctx.fillRect(cardX,cardY,cardW,3);
-
-  // border
-  ctx.strokeStyle=cont.conquered?'rgba(200,160,32,0.7)':'rgba(139,26,26,0.7)';
-  ctx.lineWidth=1.2;
-  _roundRect(ctx,cardX,cardY,cardW,cardH,8);
-  ctx.stroke();
-  ctx.restore();
-
-  // ── content ──
-  const pad=10;
-  const tx=cardX+pad;
-  let ty=cardY+pad+12;
-
-  // name
-  ctx.save();
-  ctx.font='bold 13px monospace';
-  ctx.textAlign='left';ctx.textBaseline='top';
-  ctx.fillStyle='#d4a832';
-  ctx.letterSpacing='2px';
-  ctx.fillText(cont.name.toUpperCase(),tx,ty);
-
-  // biome badge
-  ctx.font='9px monospace';
-  ctx.fillStyle=biome.hi;
-  ctx.textAlign='right';
-  ctx.fillText(biome.name,cardX+cardW-pad,ty+2);
-  ctx.textAlign='left';
-  ctx.restore();
-
-  ty+=18;
-
-  // status line
-  ctx.save();
-  ctx.font='bold 10px monospace';
-  ctx.textBaseline='top';
-  if(cont.conquered){
-    ctx.fillStyle='#3a7a3a';
-    ctx.fillText('● SECURED',tx,ty);
-    // building summary
-    if(cont.bldgs&&cont.bldgs.length){
-      const counts={};
-      for(const b of cont.bldgs) counts[b.type]=(counts[b.type]||0)+1;
-      const top3=BLDG_PRIORITY.filter(t=>counts[t]).slice(0,4);
-      const parts=top3.map(t=>(BLDG_ICONS[t]||t)+(counts[t]>1?'×'+counts[t]:''));
-      ctx.font='11px serif';
-      ctx.fillStyle='#a0b080';
-      ctx.fillText(parts.join('  '),tx+80,ty-1);
-    }
-  } else {
-    const pulse=0.7+0.3*Math.sin(now*0.004);
-    ctx.fillStyle=`rgba(200,48,16,${pulse})`;
-    ctx.fillText('⚠ '+( cont.threat||'HOSTILE'),tx,ty);
-    // alien forces
-    const aliens=cont.aliens||{infantry:0,tanks:0,cavalry:0};
-    const total=aliens.infantry+aliens.tanks+aliens.cavalry;
-    ctx.font='9px monospace';
-    ctx.fillStyle='#c87878';
-    ctx.fillText(`INF:${aliens.infantry}  TKS:${aliens.tanks}  CAV:${aliens.cavalry}  (${total} total)`,tx+85,ty+1);
-  }
-  ctx.restore();
-
-  ty+=16;
-
-  // divider
-  ctx.save();
-  ctx.strokeStyle='rgba(80,80,80,0.5)';ctx.lineWidth=0.5;
-  ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(cardX+cardW-pad,ty);ctx.stroke();
-  ctx.restore();
-  ty+=7;
-
-  // ── buttons ──
-  const btnH=Math.round(cardH*0.30);
-  const btnY=cardY+cardH-btnH-pad;
-  const btnW=Math.round((cardW-pad*2-8)/2);
-
-  // ENTER / MANAGE button
-  const btn1X=tx;
-  _drawCardBtn(ctx,btn1X,btnY,btnW,btnH,cont.conquered?'⊞ MANAGE':'⊕ ENTER',cont.conquered?'#3a7a3a':'#6080a0',true);
-  _hitRegions.push({type:'card-enter',contIdx:idx,x:btn1X,y:btnY,w:btnW,h:btnH});
-
-  // INVADE / PLAN INVASION button (only if not conquered, or always show as secondary)
-  const btn2X=btn1X+btnW+8;
-  if(!cont.conquered){
-    _drawCardBtn(ctx,btn2X,btnY,btnW,btnH,'⚔ INVADE','#8b1a1a',true);
-    _hitRegions.push({type:'card-invade',contIdx:idx,x:btn2X,y:btnY,w:btnW,h:btnH});
-  } else {
-    _drawCardBtn(ctx,btn2X,btnY,btnW,btnH,'✕ CLOSE','#2a2a3a',false);
-    _hitRegions.push({type:'card-close',contIdx:idx,x:btn2X,y:btnY,w:btnW,h:btnH});
-  }
-
-  // register card body as a hit blocker so clicks don't fall through
-  _hitRegions.push({type:'card-bg',contIdx:idx,x:cardX,y:cardY,w:cardW,h:cardH});
-}
-
-function _drawCardBtn(ctx,x,y,w,h,label,color,active){
-  ctx.save();
-  const bgGrad=ctx.createLinearGradient(x,y,x,y+h);
-  bgGrad.addColorStop(0,active?_hexAlpha(color,0.55):_hexAlpha(color,0.2));
-  bgGrad.addColorStop(1,active?_hexAlpha(color,0.30):_hexAlpha(color,0.1));
-  ctx.fillStyle=bgGrad;
-  _roundRect(ctx,x,y,w,h,5);ctx.fill();
-  ctx.strokeStyle=active?_hexAlpha(color,0.9):'rgba(80,80,80,0.4)';
-  ctx.lineWidth=1;
-  _roundRect(ctx,x,y,w,h,5);ctx.stroke();
-  ctx.font='bold 9px monospace';
-  ctx.fillStyle=active?'#e8e0c0':'#606060';
-  ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText(label,x+w/2,y+h/2);
-  ctx.restore();
-}
-
-function _hexAlpha(hex,alpha){
-  // convert #rrggbb + alpha to rgba
-  const r=parseInt(hex.slice(1,3),16);
-  const g=parseInt(hex.slice(3,5),16);
-  const b=parseInt(hex.slice(5,7),16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-
-function _roundRect(ctx,x,y,w,h,r){
-  ctx.beginPath();
-  ctx.moveTo(x+r,y);
-  ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);
-  ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
-  ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);
-  ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);
-  ctx.closePath();
-}
-
-function _drawHint(ctx,W,H){
-  ctx.save();
-  ctx.font='9px monospace';
-  ctx.textAlign='center';ctx.textBaseline='bottom';
-  ctx.fillStyle='rgba(160,150,120,0.45)';
-  ctx.fillText('TAP A CONTINENT TO SELECT',W/2,H-6);
-  ctx.restore();
-}
-
-// ── click / touch handlers ──
-function _onClick(e){
-  if(!_canvas) return;
-  const rect=_canvas.getBoundingClientRect();
-  const scaleX=_canvas.width/rect.width;
-  const scaleY=_canvas.height/rect.height;
-  const mx=(e.clientX-rect.left)*scaleX;
-  const my=(e.clientY-rect.top)*scaleY;
-  _handleHit(mx,my);
-}
-
-function _onTouchStart(e){
-  if(e.touches.length>0) _touchStartX=e.touches[0].clientX;
-}
-
-function _onTouchEnd(e){
-  if(!_canvas) return;
-  if(e.changedTouches.length===0) return;
-  const dx=e.changedTouches[0].clientX-_touchStartX;
-  if(Math.abs(dx)>50){
-    // swipe to cycle selection
-    if(dx<0) state.selCont=(state.selCont+1)%5;
-    else state.selCont=(state.selCont+4)%5;
-    _selectedInfoIdx=state.selCont;
-    renderGlobeView();
+function _svgOnClick(e){
+  const t=e.target;
+  if(t && t.hasAttribute && t.hasAttribute('data-cont-idx')){
+    const idx=parseInt(t.getAttribute('data-cont-idx'));
+    state.selCont=idx;
+    _svgSelectedIdx=idx;
+    openContinent(idx);
     return;
   }
-  const rect=_canvas.getBoundingClientRect();
-  const scaleX=_canvas.width/rect.width;
-  const scaleY=_canvas.height/rect.height;
-  const mx=(e.changedTouches[0].clientX-rect.left)*scaleX;
-  const my=(e.changedTouches[0].clientY-rect.top)*scaleY;
-  _handleHit(mx,my);
+  _svgSelectedIdx=-1;
+  renderGlobeView();
 }
 
-function _handleHit(mx,my){
-  // check hit regions from last-drawn (top) backwards
-  const regions=[..._hitRegions].reverse();
-  for(const r of regions){
-    if(mx>=r.x && mx<=r.x+r.w && my>=r.y && my<=r.y+r.h){
-      // for continent regions, also check actual polygon
-      if(r.type==='continent'){
-        if(!_ptInPoly(mx,my,r.poly)){
-          continue; // miss the polygon shape
-        }
-        // select this continent and show info card
-        state.selCont=r.contIdx;
-        _selectedInfoIdx=r.contIdx;
-        renderGlobeView();
-        return;
-      }
-      if(r.type==='card-enter'){
-        openContinent(r.contIdx);
-        return;
-      }
-      if(r.type==='card-invade'){
-        if(typeof openInvasion==='function') openInvasion(r.contIdx);
-        return;
-      }
-      if(r.type==='card-close'){
-        _selectedInfoIdx=-1;
-        renderGlobeView();
-        return;
-      }
-      if(r.type==='card-bg'){
-        // swallow — don't fall through
-        return;
-      }
-    }
-  }
-  // click outside any region — deselect card
-  if(_selectedInfoIdx>=0){
-    _selectedInfoIdx=-1;
-    renderGlobeView();
-  }
-}
-
-// ── refresh wrapper ──
 function refreshGlobeView(){
-  if(!document.getElementById('globe-view')) return;
-  if(!_canvas||!_ctx){
-    const list=document.getElementById('continent-list');
-    if(list && list.querySelector('#globe-view')){
-      _canvas=document.getElementById('globe-view');
-      _ctx=_canvas.getContext('2d');
-    } else {
-      return;
-    }
+  if(!_svgEl){
+    const el=document.getElementById('globe-view');
+    if(el) _svgEl=el;
+    else return;
   }
   renderGlobeView();
 }
 
-// ── legacy API stubs (kept for external callers) ──
-function drawContinentPanel(ctx,cont,cx,cy,panelW,panelH,isSelected,contIdx,now){
-  // Backwards-compat stub — draws a minimal panel in the old style
-  const px=cx-panelW/2,py=cy-panelH/2;
+// ── legacy canvas stubs kept for external callers ──
+function drawContinentPanel(ctx,cont,cx,cy,panelW,panelH,isSelected,contIdx){
   const biome=BIOME_COLORS[(contIdx||0)%BIOME_COLORS.length];
   ctx.save();
-  ctx.fillStyle=biome.mid;
-  ctx.strokeStyle=cont.conquered?'#c8a020':'#8b1a1a';
-  ctx.lineWidth=1.5;
-  ctx.fillRect(px,py,panelW,panelH);
-  ctx.strokeRect(px,py,panelW,panelH);
-  ctx.font='bold 9px monospace';
-  ctx.fillStyle='#d4a832';
-  ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText(cont.name.toUpperCase(),cx,cy);
-  ctx.restore();
+  ctx.fillStyle=biome.mid;ctx.strokeStyle=cont.conquered?'#c8a020':'#8b1a1a';ctx.lineWidth=1.5;
+  ctx.fillRect(cx-panelW/2,cy-panelH/2,panelW,panelH);ctx.strokeRect(cx-panelW/2,cy-panelH/2,panelW,panelH);
+  ctx.font='bold 9px monospace';ctx.fillStyle='#d4a832';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(cont.name.toUpperCase(),cx,cy);ctx.restore();
 }
 
 function drawAlienDefensiveFormation(ctx,cont,panelX,panelY,panelW,panelH){
@@ -2882,25 +2317,15 @@ function drawAlienDefensiveFormation(ctx,cont,panelX,panelY,panelW,panelH){
   const laneW=panelW/3;
   for(let li=0;li<3;li++){
     const laneX=panelX+li*laneW;
-    const wallY=panelY+panelH*0.30;
-    ctx.fillStyle='rgba(100,100,80,0.7)';
-    ctx.fillRect(laneX+2,wallY,laneW-4,4);
-    const infDots=Math.max(1,Math.round((aliens.infantry/3)/25));
-    const infY=panelY+panelH*0.55;
+    ctx.fillStyle='rgba(100,100,80,0.7)';ctx.fillRect(laneX+2,panelY+panelH*0.30,laneW-4,4);
+    const dots=Math.max(1,Math.round((aliens.infantry/3)/25));
     ctx.fillStyle='rgba(200,50,20,0.85)';
-    const infSpacing=laneW/(infDots+1);
-    for(let d=0;d<infDots;d++){
-      ctx.beginPath();
-      ctx.arc(laneX+(d+1)*infSpacing,infY,3,0,Math.PI*2);
-      ctx.fill();
-    }
+    const sp=laneW/(dots+1);
+    for(let d=0;d<dots;d++){ctx.beginPath();ctx.arc(laneX+(d+1)*sp,panelY+panelH*0.55,3,0,Math.PI*2);ctx.fill();}
   }
   const total=aliens.infantry+aliens.tanks+aliens.cavalry;
-  ctx.save();
-  ctx.font='bold 8px monospace';ctx.textAlign='center';ctx.textBaseline='bottom';
-  ctx.fillStyle='rgba(255,100,60,0.9)';
-  ctx.fillText(`👾 ${total} defenders`,panelX+panelW/2,panelY+panelH-2);
-  ctx.restore();
+  ctx.save();ctx.font='bold 8px monospace';ctx.textAlign='center';ctx.textBaseline='bottom';
+  ctx.fillStyle='rgba(255,100,60,0.9)';ctx.fillText(`👾 ${total} defenders`,panelX+panelW/2,panelY+panelH-2);ctx.restore();
 }
 
 // ── exports ──

@@ -456,7 +456,7 @@ function nextUid(){state._uid=(state._uid||0)+1;return state._uid;}
 
 // Production tick
 setInterval(()=>{patchProductionTick();renderAllResBars();},3000);
-setInterval(()=>{applyUpkeep();renderAllResBars();},3000);
+setInterval(()=>{applyUpkeep();if(typeof applyFleetUpkeep==='function')applyFleetUpkeep();renderAllResBars();},3000);
 
 // ─────────────────────────────────────────────
 //  STARFIELD
@@ -2047,6 +2047,8 @@ initEconomyV3();
 applyNewBuildingData();
 renderHome();
 initPixi();
+if(typeof initResearchV2==='function'){ initResearchV2(); patchResearchCenterBuilding(); }
+if(typeof initFleet==='function'){ initFleet(); startShipBuildInterval(); }
 
 // ═══ GLOBE VIEW ═══
 // ═══ GLOBE VIEW ═══
@@ -4468,6 +4470,1996 @@ function _patchSolarSystemUI() {
   };
   _init();
 })();
+
+
+// ═══ RESEARCH V2 ═══
+// Drop-in research tree replacement for Legion Galaxy.
+// Provides RESEARCH_TREE data + all helper functions.
+// No IIFE wrapper — paste directly into the game or load as a module.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESEARCH TREE DATA
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RESEARCH_TREE = {
+
+  // ── Branch 1: MILITARY DOCTRINE ──────────────────────────────────────────
+  military: {
+    label: 'Military Doctrine',
+    icon: '⚔️',
+    color: 'var(--blood)',
+    items: [
+      {
+        id: 'basicTraining', name: 'Basic Training', icon: '🪖', cost: 0,
+        autoUnlock: true, branch: 'military', prereqs: [],
+        desc: 'Infantry +5% ATK',
+        effect: { type: 'troopAtk', unit: 'infantry', bonus: 0.05 }
+      },
+      {
+        id: 'ironDiscipline', name: 'Iron Discipline', icon: '🛡️', cost: 120,
+        branch: 'military', prereqs: ['basicTraining'],
+        desc: 'All troops +10% DEF',
+        effect: { type: 'troopDef', unit: 'all', bonus: 0.10 }
+      },
+      {
+        id: 'assaultTactics', name: 'Assault Tactics', icon: '🗡️', cost: 150,
+        branch: 'military', prereqs: ['basicTraining'],
+        desc: 'Infantry +15% ATK',
+        effect: { type: 'troopAtk', unit: 'infantry', bonus: 0.15 }
+      },
+      {
+        id: 'fortify', name: 'Fortify', icon: '🏰', cost: 200,
+        branch: 'military', prereqs: ['ironDiscipline'],
+        desc: 'Barracks produces troops 20% faster',
+        effect: { type: 'troopProd', unit: 'all', bonus: 0.20 }
+      },
+      {
+        id: 'mountedRaiders', name: 'Mounted Raiders', icon: '🐎', cost: 150,
+        branch: 'military', prereqs: ['basicTraining'],
+        desc: 'Cavalry ATK +20%',
+        effect: { type: 'troopAtk', unit: 'cavalry', bonus: 0.20 }
+      },
+      {
+        id: 'hitAndRun', name: 'Hit & Run', icon: '💨', cost: 220,
+        branch: 'military', prereqs: ['mountedRaiders'],
+        desc: 'Cavalry take 15% less damage',
+        effect: { type: 'troopDef', unit: 'cavalry', bonus: 0.15 }
+      },
+      {
+        id: 'armoredWarfare', name: 'Armored Warfare', icon: '🛡️', cost: 250,
+        branch: 'military', prereqs: ['assaultTactics'],
+        desc: 'Tank ATK +20%',
+        effect: { type: 'troopAtk', unit: 'tanks', bonus: 0.20 }
+      },
+      {
+        id: 'reactiveArmor', name: 'Reactive Armor', icon: '🔰', cost: 300,
+        branch: 'military', prereqs: ['armoredWarfare'],
+        desc: 'Tanks take 25% less damage',
+        effect: { type: 'troopDef', unit: 'tanks', bonus: 0.25 }
+      },
+      {
+        id: 'blitzkrieg', name: 'Blitzkrieg', icon: '⚡', cost: 380,
+        branch: 'military', prereqs: ['armoredWarfare', 'mountedRaiders'],
+        desc: 'All units +15% speed in combat',
+        effect: { type: 'troopSpd', unit: 'all', bonus: 0.15 }
+      },
+      {
+        id: 'siegeWarfare', name: 'Siege Warfare', icon: '💣', cost: 320,
+        branch: 'military', prereqs: ['armoredWarfare'],
+        desc: 'Unlock Siege Engine (T3 tank upgrade)',
+        effect: { type: 'unlock', key: 'siegeEngine' }
+      },
+      {
+        id: 'eliteForces', name: 'Elite Forces', icon: '🎖️', cost: 350,
+        branch: 'military', prereqs: ['ironDiscipline', 'assaultTactics'],
+        desc: 'All T3 troops: +30% HP',
+        effect: { type: 'troopHp', unit: 'all_t3', bonus: 0.30 }
+      },
+      {
+        id: 'combinedArms', name: 'Combined Arms', icon: '🤝', cost: 400,
+        branch: 'military', prereqs: ['siegeWarfare', 'hitAndRun'],
+        desc: 'Units adjacent to different types deal +10% damage',
+        effect: { type: 'passive', key: 'combinedArms', bonus: 0.10 }
+      },
+      {
+        id: 'orbitalDrop', name: 'Orbital Drop', icon: '🚀', cost: 450,
+        branch: 'military', prereqs: ['eliteForces'],
+        desc: 'Deploy troops instantly at battle start (no placement phase)',
+        effect: { type: 'unlock', key: 'orbitalDrop' }
+      },
+      {
+        id: 'strategicReserve', name: 'Strategic Reserve', icon: '🔄', cost: 280,
+        branch: 'military', prereqs: ['fortify'],
+        desc: 'Defeated troops have 20% survival chance',
+        effect: { type: 'passive', key: 'strategicReserve', bonus: 0.20 }
+      },
+      {
+        id: 'supremeCommander', name: 'Supreme Commander', icon: '👑', cost: 600,
+        branch: 'military', prereqs: ['combinedArms', 'strategicReserve'],
+        desc: 'Unlock all T3 troop upgrades for free',
+        effect: { type: 'unlock', key: 'allT3TroopsFree' }
+      },
+    ]
+  },
+
+  // ── Branch 2: ENGINEERING ─────────────────────────────────────────────────
+  engineering: {
+    label: 'Engineering',
+    icon: '🏗️',
+    color: 'var(--rust)',
+    items: [
+      {
+        id: 'basicConstruction', name: 'Basic Construction', icon: '🔧', cost: 0,
+        autoUnlock: true, branch: 'engineering', prereqs: [],
+        desc: 'Build speed +10%',
+        effect: { type: 'buildSpd', bonus: 0.10 }
+      },
+      {
+        id: 'advConstruction', name: 'Advanced Construction', icon: '🏗️', cost: 150,
+        branch: 'engineering', prereqs: ['basicConstruction'],
+        desc: 'Unlock level 2 buildings',
+        effect: { type: 'unlock', key: 'advConstruction' }
+      },
+      {
+        id: 'reinforcedFoundations', name: 'Reinforced Foundations', icon: '🧱', cost: 180,
+        branch: 'engineering', prereqs: ['basicConstruction'],
+        desc: 'Building HP +20%, reduces counter-attack damage',
+        effect: { type: 'bldgHp', bonus: 0.20 }
+      },
+      {
+        id: 'rapidAssembly', name: 'Rapid Assembly', icon: '⚙️', cost: 220,
+        branch: 'engineering', prereqs: ['advConstruction'],
+        desc: 'Build speed +25%',
+        effect: { type: 'buildSpd', bonus: 0.25 }
+      },
+      {
+        id: 'megaStructures', name: 'Mega-Structures', icon: '🏛️', cost: 400,
+        branch: 'engineering', prereqs: ['advConstruction'],
+        desc: 'Unlock level 3 buildings',
+        effect: { type: 'unlock', key: 'megaStructures' }
+      },
+      {
+        id: 'gridExpansion', name: 'Grid Expansion', icon: '📐', cost: 200,
+        branch: 'engineering', prereqs: ['advConstruction'],
+        desc: 'Unlocks additional building rows',
+        effect: { type: 'unlock', key: 'gridExpansion' }
+      },
+      {
+        id: 'powerGridMk1', name: 'Power Grid Mk.I', icon: '⚡', cost: 230,
+        branch: 'engineering', prereqs: ['advConstruction'],
+        desc: 'Power Relays produce +20% energy',
+        effect: { type: 'energyProd', bonus: 0.20 }
+      },
+      {
+        id: 'powerGridMk2', name: 'Power Grid Mk.II', icon: '🔋', cost: 360,
+        branch: 'engineering', prereqs: ['powerGridMk1'],
+        desc: 'Power Relays produce +40% more energy (cumulative)',
+        effect: { type: 'energyProd', bonus: 0.40 }
+      },
+      {
+        id: 'efficientMining', name: 'Efficient Mining', icon: '⛏️', cost: 240,
+        branch: 'engineering', prereqs: ['advConstruction'],
+        desc: 'Resource Collectors +15% output',
+        effect: { type: 'prodBonus', key: 'resourceCollector', bonus: 0.15 }
+      },
+      {
+        id: 'industrialCore', name: 'Industrial Core', icon: '🏭', cost: 420,
+        branch: 'engineering', prereqs: ['efficientMining', 'megaStructures'],
+        desc: 'All production buildings +10%',
+        effect: { type: 'prodBonus', key: 'all', bonus: 0.10 }
+      },
+      {
+        id: 'automatedSystems', name: 'Automated Systems', icon: '🤖', cost: 500,
+        branch: 'engineering', prereqs: ['industrialCore'],
+        desc: 'Buildings never go offline from energy deficit (throttle instead)',
+        effect: { type: 'passive', key: 'automatedSystems', bonus: 0 }
+      },
+      {
+        id: 'masterBuilder', name: 'Master Builder', icon: '🔨', cost: 550,
+        branch: 'engineering', prereqs: ['rapidAssembly', 'industrialCore'],
+        desc: 'All build times -50%',
+        effect: { type: 'buildSpd', bonus: 0.50 }
+      },
+    ]
+  },
+
+  // ── Branch 3: SCIENCE & TECHNOLOGY ───────────────────────────────────────
+  science: {
+    label: 'Science & Technology',
+    icon: '🔬',
+    color: 'var(--mil)',
+    items: [
+      {
+        id: 'researchMethods', name: 'Research Methods', icon: '📖', cost: 0,
+        autoUnlock: true, branch: 'science', prereqs: [],
+        desc: 'Research Centers +10% output',
+        effect: { type: 'researchProd', bonus: 0.10 }
+      },
+      {
+        id: 'appliedPhysics', name: 'Applied Physics', icon: '⚗️', cost: 130,
+        branch: 'science', prereqs: ['researchMethods'],
+        desc: 'Research Centers +15% output',
+        effect: { type: 'researchProd', bonus: 0.15 }
+      },
+      {
+        id: 'quantumComputing', name: 'Quantum Computing', icon: '💻', cost: 280,
+        branch: 'science', prereqs: ['appliedPhysics'],
+        desc: 'Research +25%, unlocks advanced ship research',
+        effect: { type: 'researchProd', bonus: 0.25 }
+      },
+      {
+        id: 'xenobiology', name: 'Xenobiology', icon: '🧬', cost: 160,
+        branch: 'science', prereqs: ['researchMethods'],
+        desc: 'Unlocks terraforming speed +50%',
+        effect: { type: 'terraformSpd', bonus: 0.50 }
+      },
+      {
+        id: 'materialScience', name: 'Material Science', icon: '🔬', cost: 200,
+        branch: 'science', prereqs: ['appliedPhysics'],
+        desc: 'All resource storage caps +20%',
+        effect: { type: 'storeCap', key: 'all', bonus: 0.20 }
+      },
+      {
+        id: 'nanoAssembly', name: 'Nano-Assembly', icon: '🧪', cost: 340,
+        branch: 'science', prereqs: ['materialScience', 'quantumComputing'],
+        desc: 'Excellorant lasts 50% longer',
+        effect: { type: 'passive', key: 'excellorantDuration', bonus: 0.50 }
+      },
+      {
+        id: 'particleWeapons', name: 'Particle Weapons', icon: '🔫', cost: 320,
+        branch: 'science', prereqs: ['quantumComputing'],
+        desc: 'Ship weapons +25% damage',
+        effect: { type: 'shipAtk', bonus: 0.25 }
+      },
+      {
+        id: 'shieldTechnology', name: 'Shield Technology', icon: '🛡️', cost: 300,
+        branch: 'science', prereqs: ['quantumComputing'],
+        desc: 'Ships +20% HP',
+        effect: { type: 'shipHp', bonus: 0.20 }
+      },
+      {
+        id: 'warpTheory', name: 'Warp Theory', icon: '🌀', cost: 480,
+        branch: 'science', prereqs: ['particleWeapons', 'shieldTechnology'],
+        desc: 'Unlock Dreadnaught ship class',
+        effect: { type: 'unlock', key: 'dreadnaught' }
+      },
+      {
+        id: 'dimensionalFold', name: 'Dimensional Fold', icon: '🕳️', cost: 550,
+        branch: 'science', prereqs: ['warpTheory'],
+        desc: 'Travel time between planets reduced',
+        effect: { type: 'passive', key: 'travelTime', bonus: 0.30 }
+      },
+      {
+        id: 'xenotechAnalysis', name: 'Xenotech Analysis', icon: '👽', cost: 380,
+        branch: 'science', prereqs: ['xenobiology', 'nanoAssembly'],
+        desc: 'Alien garrisons have 15% fewer troops',
+        effect: { type: 'passive', key: 'alienGarrison', bonus: 0.15 }
+      },
+      {
+        id: 'grandUnifiedTheory', name: 'Grand Unified Theory', icon: '🌌', cost: 700,
+        branch: 'science', prereqs: ['warpTheory', 'dimensionalFold', 'xenotechAnalysis'],
+        desc: 'All research costs -30%',
+        effect: { type: 'passive', key: 'researchCostDiscount', bonus: 0.30 }
+      },
+    ]
+  },
+
+  // ── Branch 4: ECONOMY ─────────────────────────────────────────────────────
+  economy: {
+    label: 'Economy',
+    icon: '💰',
+    color: 'var(--gold)',
+    items: [
+      {
+        id: 'tradeRoutes', name: 'Trade Routes', icon: '🛒', cost: 0,
+        autoUnlock: true, branch: 'economy', prereqs: [],
+        desc: 'Trade Post earns +10% credits',
+        effect: { type: 'prodBonus', key: 'tradePost', bonus: 0.10 }
+      },
+      {
+        id: 'resourceOptimization', name: 'Resource Optimization', icon: '⚙️', cost: 0,
+        autoUnlock: true, branch: 'economy', prereqs: [],
+        desc: 'All production buildings +5% efficiency',
+        effect: { type: 'prodBonus', key: 'all', bonus: 0.05 }
+      },
+      {
+        id: 'marketAnalysis', name: 'Market Analysis', icon: '📊', cost: 140,
+        branch: 'economy', prereqs: ['tradeRoutes'],
+        desc: 'Trade rates improve +10%',
+        effect: { type: 'prodBonus', key: 'tradePost', bonus: 0.10 }
+      },
+      {
+        id: 'energyEfficiency', name: 'Energy Efficiency', icon: '💡', cost: 160,
+        branch: 'economy', prereqs: ['resourceOptimization'],
+        desc: 'Power consumption -20%',
+        effect: { type: 'energyEff', bonus: 0.20 }
+      },
+      {
+        id: 'megafarming', name: 'Megafarming', icon: '🌾', cost: 180,
+        branch: 'economy', prereqs: ['resourceOptimization'],
+        desc: 'Farm output +25%',
+        effect: { type: 'prodBonus', key: 'farm', bonus: 0.25 }
+      },
+      {
+        id: 'bulkTransport', name: 'Bulk Transport', icon: '🚢', cost: 240,
+        branch: 'economy', prereqs: ['marketAnalysis'],
+        desc: 'Commodity packages are 25% larger',
+        effect: { type: 'passive', key: 'commoditySize', bonus: 0.25 }
+      },
+      {
+        id: 'supplyChain', name: 'Supply Chain', icon: '🔗', cost: 300,
+        branch: 'economy', prereqs: ['bulkTransport'],
+        desc: 'Resource production +10% on all planets',
+        effect: { type: 'prodBonus', key: 'all', bonus: 0.10 }
+      },
+      {
+        id: 'economicDominance', name: 'Economic Dominance', icon: '🏦', cost: 420,
+        branch: 'economy', prereqs: ['supplyChain'],
+        desc: 'Credits from Trade Posts +50%',
+        effect: { type: 'prodBonus', key: 'tradePost', bonus: 0.50 }
+      },
+      {
+        id: 'surplusExport', name: 'Surplus Export', icon: '📦', cost: 320,
+        branch: 'economy', prereqs: ['megafarming', 'bulkTransport'],
+        desc: 'Sell excess food for credits automatically',
+        effect: { type: 'unlock', key: 'surplusExport' }
+      },
+      {
+        id: 'galacticExchange', name: 'Galactic Exchange', icon: '🌐', cost: 550,
+        branch: 'economy', prereqs: ['economicDominance', 'surplusExport'],
+        desc: 'Commodity Exchange rates +40%',
+        effect: { type: 'prodBonus', key: 'commodityExchange', bonus: 0.40 }
+      },
+    ]
+  },
+
+  // ── Branch 5: FLEET TECHNOLOGY ────────────────────────────────────────────
+  fleet: {
+    label: 'Fleet Technology',
+    icon: '🚀',
+    color: 'var(--steel)',
+    items: [
+      {
+        id: 'hullPlatingMk1', name: 'Hull Plating Mk.I', icon: '🔩', cost: 200,
+        branch: 'fleet', prereqs: [],
+        desc: 'Ship HP +15%',
+        effect: { type: 'shipHp', bonus: 0.15 }
+      },
+      {
+        id: 'hullPlatingMk2', name: 'Hull Plating Mk.II', icon: '🔩', cost: 350,
+        branch: 'fleet', prereqs: ['hullPlatingMk1'],
+        desc: 'Ship HP +20%',
+        effect: { type: 'shipHp', bonus: 0.20 }
+      },
+      {
+        id: 'weaponSystemsMk1', name: 'Weapon Systems Mk.I', icon: '🔫', cost: 200,
+        branch: 'fleet', prereqs: [],
+        desc: 'Ship damage +15%',
+        effect: { type: 'shipAtk', bonus: 0.15 }
+      },
+      {
+        id: 'weaponSystemsMk2', name: 'Weapon Systems Mk.II', icon: '🔫', cost: 350,
+        branch: 'fleet', prereqs: ['weaponSystemsMk1'],
+        desc: 'Ship damage +20%',
+        effect: { type: 'shipAtk', bonus: 0.20 }
+      },
+      {
+        id: 'thrusterDriveMk1', name: 'Thruster Drive Mk.I', icon: '🔥', cost: 180,
+        branch: 'fleet', prereqs: [],
+        desc: 'Ship speed +10%',
+        effect: { type: 'shipSpd', bonus: 0.10 }
+      },
+      {
+        id: 'thrusterDriveMk2', name: 'Thruster Drive Mk.II', icon: '🔥', cost: 320,
+        branch: 'fleet', prereqs: ['thrusterDriveMk1'],
+        desc: 'Ship speed +15%',
+        effect: { type: 'shipSpd', bonus: 0.15 }
+      },
+      {
+        id: 'miningLaser', name: 'Mining Laser', icon: '⛏️', cost: 260,
+        branch: 'fleet', prereqs: ['hullPlatingMk1'],
+        desc: 'Mining ships collect +30% resources',
+        effect: { type: 'prodBonus', key: 'miningShip', bonus: 0.30 }
+      },
+      {
+        id: 'carrierTech', name: 'Carrier Tech', icon: '🛸', cost: 380,
+        branch: 'fleet', prereqs: ['weaponSystemsMk1', 'thrusterDriveMk1'],
+        desc: 'Unlock Carrier ship class',
+        effect: { type: 'unlock', key: 'carrierShip' }
+      },
+      {
+        id: 'fleetCoordination', name: 'Fleet Coordination', icon: '📡', cost: 440,
+        branch: 'fleet', prereqs: ['carrierTech'],
+        desc: 'All ships in fleet +10% combat stats',
+        effect: { type: 'passive', key: 'fleetBonus', bonus: 0.10 }
+      },
+      {
+        id: 'capitalShipDoctrine', name: 'Capital Ship Doctrine', icon: '💥', cost: 560,
+        branch: 'fleet', prereqs: ['carrierTech', 'hullPlatingMk2'],
+        desc: 'Unlock Dreadnaught (if Warp Theory also researched)',
+        effect: { type: 'unlock', key: 'capitalShip' }
+      },
+    ]
+  },
+
+  // ── Branch 6: PLANETARY SCIENCE ───────────────────────────────────────────
+  planetary: {
+    label: 'Planetary Science',
+    icon: '🌍',
+    color: 'var(--mil)',
+    items: [
+      {
+        id: 'atmosphericAnalysis', name: 'Atmospheric Analysis', icon: '🌬️', cost: 0,
+        autoUnlock: true, branch: 'planetary', prereqs: [],
+        desc: 'Reveals planet surface details',
+        effect: { type: 'unlock', key: 'planetDetails' }
+      },
+      {
+        id: 'colonizationDoctrine', name: 'Colonization Doctrine', icon: '🏴', cost: 140,
+        branch: 'planetary', prereqs: ['atmosphericAnalysis'],
+        desc: 'Colony setup costs -20%',
+        effect: { type: 'passive', key: 'colonyCost', bonus: 0.20 }
+      },
+      {
+        id: 'terraformingMk1', name: 'Terraforming Mk.I', icon: '🌱', cost: 200,
+        branch: 'planetary', prereqs: ['atmosphericAnalysis'],
+        desc: 'Terraform speed +25%',
+        effect: { type: 'terraformSpd', bonus: 0.25 }
+      },
+      {
+        id: 'terraformingMk2', name: 'Terraforming Mk.II', icon: '🌿', cost: 340,
+        branch: 'planetary', prereqs: ['terraformingMk1'],
+        desc: 'Terraforming requires 25% fewer resources',
+        effect: { type: 'passive', key: 'terraformCost', bonus: 0.25 }
+      },
+      {
+        id: 'biosphereEngineering', name: 'Biosphere Engineering', icon: '🌳', cost: 300,
+        branch: 'planetary', prereqs: ['terraformingMk1'],
+        desc: 'Agri-worlds produce +30% food',
+        effect: { type: 'prodBonus', key: 'agriWorld', bonus: 0.30 }
+      },
+      {
+        id: 'xenogeology', name: 'Xenogeology', icon: '🪨', cost: 220,
+        branch: 'planetary', prereqs: ['colonizationDoctrine'],
+        desc: 'Resource Collectors on new planets +20%',
+        effect: { type: 'prodBonus', key: 'newPlanetCollector', bonus: 0.20 }
+      },
+      {
+        id: 'deepCoreMining', name: 'Deep Core Mining', icon: '⛏️', cost: 380,
+        branch: 'planetary', prereqs: ['xenogeology'],
+        desc: 'Unlock a second Resource Collector slot per continent',
+        effect: { type: 'unlock', key: 'deepCoreMining' }
+      },
+      {
+        id: 'planetaryDefenseMk2', name: 'Planetary Defense Mk.II', icon: '🛡️', cost: 300,
+        branch: 'planetary', prereqs: ['terraformingMk1'],
+        desc: 'Defense Grid effectiveness +50%',
+        effect: { type: 'passive', key: 'defenseGrid', bonus: 0.50 }
+      },
+    ]
+  },
+
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FLAT LOOKUP TABLE (id → item)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RESEARCH_TREE_INDEX = (() => {
+  const idx = {};
+  for (const branch of Object.values(RESEARCH_TREE)) {
+    for (const item of branch.items) {
+      idx[item.id] = item;
+    }
+  }
+  return idx;
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATE INIT
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Call once after state is initialized (or on save-load).
+ * Adds state.researchV2 Set if missing, then auto-unlocks free items.
+ */
+function initResearchV2() {
+  if (!state.researchV2) state.researchV2 = new Set();
+  // Auto-unlock all items with cost:0 and autoUnlock:true
+  for (const item of Object.values(RESEARCH_TREE_INDEX)) {
+    if (item.autoUnlock && item.cost === 0 && !state.researchV2.has(item.id)) {
+      state.researchV2.add(item.id);
+    }
+  }
+  // Bridge: sync legacy techUnlocked from BLDG_RESEARCH into researchV2
+  if (state.techUnlocked) {
+    if (state.techUnlocked.has('advConstruction') && !state.researchV2.has('advConstruction')) {
+      state.researchV2.add('advConstruction');
+    }
+    if (state.techUnlocked.has('megaStructures') && !state.researchV2.has('megaStructures')) {
+      state.researchV2.add('megaStructures');
+    }
+  }
+  applyResearchEffects();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PREREQUISITE / AVAILABILITY CHECK
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns true if the given research id can be purchased right now.
+ * Requires: not already done, all prereqs done, enough research points.
+ */
+function canResearch(id) {
+  if (!state.researchV2) return false;
+  if (state.researchV2.has(id)) return false; // already done
+  const item = RESEARCH_TREE_INDEX[id];
+  if (!item) return false;
+  for (const req of item.prereqs) {
+    if (!state.researchV2.has(req)) return false;
+  }
+  return true; // cost check is caller's responsibility or done in doResearchV2
+}
+
+/**
+ * Returns one of: 'done', 'available', 'locked', 'unknown'
+ */
+function getResearchStatus(id) {
+  if (!state.researchV2) return 'locked';
+  if (state.researchV2.has(id)) return 'done';
+  const item = RESEARCH_TREE_INDEX[id];
+  if (!item) return 'unknown';
+  for (const req of item.prereqs) {
+    if (!state.researchV2.has(req)) return 'locked';
+  }
+  return 'available';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DO RESEARCH (purchase)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Validates prereqs and cost, deducts research points, marks done, applies effects.
+ * Shows toast notifications. Returns true on success.
+ */
+function doResearchV2(id) {
+  if (!state.researchV2) initResearchV2();
+  const item = RESEARCH_TREE_INDEX[id];
+  if (!item) { toast('// UNKNOWN RESEARCH //'); return false; }
+  if (state.researchV2.has(id)) { toast('// ALREADY RESEARCHED //'); return false; }
+
+  // Check prereqs
+  for (const req of item.prereqs) {
+    if (!state.researchV2.has(req)) {
+      const reqItem = RESEARCH_TREE_INDEX[req];
+      toast(`// REQUIRES: ${reqItem ? reqItem.name.toUpperCase() : req.toUpperCase()} //`);
+      return false;
+    }
+  }
+
+  // Apply Grand Unified Theory discount
+  let cost = item.cost;
+  if (state.researchV2.has('grandUnifiedTheory') && cost > 0) {
+    cost = Math.floor(cost * 0.70);
+  }
+
+  if ((state.res.research || 0) < cost) {
+    toast(`// NEED ${cost} RESEARCH //`);
+    return false;
+  }
+
+  state.res.research -= cost;
+  state.researchV2.add(id);
+
+  // Bridge: keep legacy techUnlocked in sync for building gate checks
+  if (item.effect && item.effect.type === 'unlock') {
+    if (item.effect.key === 'advConstruction' || item.id === 'advConstruction') {
+      if (!state.techUnlocked) state.techUnlocked = new Set();
+      state.techUnlocked.add('advConstruction');
+    }
+    if (item.effect.key === 'megaStructures' || item.id === 'megaStructures') {
+      if (!state.techUnlocked) state.techUnlocked = new Set();
+      state.techUnlocked.add('megaStructures');
+    }
+  }
+
+  toast(`// ${item.name.toUpperCase()} UNLOCKED //`);
+  applyResearchEffects();
+  if (typeof renderAllResBars === 'function') renderAllResBars();
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EFFECT APPLICATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Global bonus cache — recomputed on each unlock
+const _researchBonuses = {};
+
+/**
+ * Recomputes all bonuses from state.researchV2.
+ * Called after each unlock and on game load.
+ */
+function applyResearchEffects() {
+  // Reset cache
+  for (const k of Object.keys(_researchBonuses)) delete _researchBonuses[k];
+
+  if (!state.researchV2) return;
+
+  for (const id of state.researchV2) {
+    const item = RESEARCH_TREE_INDEX[id];
+    if (!item || !item.effect) continue;
+    const e = item.effect;
+
+    switch (e.type) {
+      case 'troopAtk': {
+        const k = `troopAtk_${e.unit}`;
+        _researchBonuses[k] = (_researchBonuses[k] || 0) + e.bonus;
+        break;
+      }
+      case 'troopDef': {
+        const k = `troopDef_${e.unit}`;
+        _researchBonuses[k] = (_researchBonuses[k] || 0) + e.bonus;
+        break;
+      }
+      case 'troopSpd': {
+        const k = `troopSpd_${e.unit}`;
+        _researchBonuses[k] = (_researchBonuses[k] || 0) + e.bonus;
+        break;
+      }
+      case 'troopHp': {
+        const k = `troopHp_${e.unit}`;
+        _researchBonuses[k] = (_researchBonuses[k] || 0) + e.bonus;
+        break;
+      }
+      case 'troopProd': {
+        const k = `troopProd_${e.unit}`;
+        _researchBonuses[k] = (_researchBonuses[k] || 0) + e.bonus;
+        break;
+      }
+      case 'buildSpd': {
+        _researchBonuses['buildSpd'] = (_researchBonuses['buildSpd'] || 0) + e.bonus;
+        break;
+      }
+      case 'bldgHp': {
+        _researchBonuses['bldgHp'] = (_researchBonuses['bldgHp'] || 0) + e.bonus;
+        break;
+      }
+      case 'prodBonus': {
+        const k = `prodBonus_${e.key}`;
+        _researchBonuses[k] = (_researchBonuses[k] || 0) + e.bonus;
+        break;
+      }
+      case 'energyProd': {
+        _researchBonuses['energyProd'] = (_researchBonuses['energyProd'] || 0) + e.bonus;
+        break;
+      }
+      case 'energyEff': {
+        _researchBonuses['energyEff'] = (_researchBonuses['energyEff'] || 0) + e.bonus;
+        break;
+      }
+      case 'researchProd': {
+        _researchBonuses['researchProd'] = (_researchBonuses['researchProd'] || 0) + e.bonus;
+        break;
+      }
+      case 'shipHp': {
+        _researchBonuses['shipHp'] = (_researchBonuses['shipHp'] || 0) + e.bonus;
+        break;
+      }
+      case 'shipAtk': {
+        _researchBonuses['shipAtk'] = (_researchBonuses['shipAtk'] || 0) + e.bonus;
+        break;
+      }
+      case 'shipSpd': {
+        _researchBonuses['shipSpd'] = (_researchBonuses['shipSpd'] || 0) + e.bonus;
+        break;
+      }
+      case 'storeCap': {
+        const k = `storeCap_${e.key}`;
+        _researchBonuses[k] = (_researchBonuses[k] || 0) + e.bonus;
+        break;
+      }
+      case 'terraformSpd': {
+        _researchBonuses['terraformSpd'] = (_researchBonuses['terraformSpd'] || 0) + e.bonus;
+        break;
+      }
+      case 'unlock': {
+        _researchBonuses[`unlock_${e.key}`] = true;
+        break;
+      }
+      case 'passive': {
+        const k = `passive_${e.key}`;
+        _researchBonuses[k] = (_researchBonuses[k] || 0) + (e.bonus || 0);
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Returns the cumulative additive bonus (as a fraction, e.g. 0.35 = +35%) for
+ * a given effect type and optional sub-key.
+ *
+ * Examples:
+ *   getResearchBonus('troopAtk', 'infantry')  → 0.20 (if +20% total)
+ *   getResearchBonus('troopAtk', 'all')       → combined all-unit bonus
+ *   getResearchBonus('shipHp')                → e.g. 0.35
+ *   getResearchBonus('unlock', 'advConstruction') → true/false
+ *
+ * For troop stats, 'all' bonuses stack on top of unit-specific ones — callers
+ * should add getResearchBonus('troopAtk', unit) + getResearchBonus('troopAtk', 'all').
+ */
+function getResearchBonus(effectType, subKey) {
+  if (subKey !== undefined) {
+    return _researchBonuses[`${effectType}_${subKey}`] || (effectType === 'unlock' ? false : 0);
+  }
+  return _researchBonuses[effectType] || 0;
+}
+
+/**
+ * Convenience: returns total troop ATK multiplier for a unit type (1.0 = no bonus).
+ */
+function getTroopAtkMult(unit) {
+  const unitBonus = getResearchBonus('troopAtk', unit);
+  const allBonus  = getResearchBonus('troopAtk', 'all');
+  return 1 + unitBonus + allBonus;
+}
+
+/**
+ * Convenience: returns total troop DEF multiplier for a unit type.
+ */
+function getTroopDefMult(unit) {
+  const unitBonus = getResearchBonus('troopDef', unit);
+  const allBonus  = getResearchBonus('troopDef', 'all');
+  return 1 + unitBonus + allBonus;
+}
+
+/**
+ * Convenience: returns total ship HP multiplier.
+ */
+function getShipHpMult() {
+  return 1 + getResearchBonus('shipHp');
+}
+
+/**
+ * Convenience: returns total ship ATK multiplier.
+ */
+function getShipAtkMult() {
+  return 1 + getResearchBonus('shipAtk');
+}
+
+/**
+ * Convenience: returns total build speed multiplier (higher = faster builds).
+ */
+function getBuildSpdMult() {
+  return 1 + getResearchBonus('buildSpd');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI — RENDER RESEARCH TREE (one branch)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns an HTML string listing all items in branchKey tier-order.
+ * Items show: icon, name, cost, prereq badges, effect desc, and action button.
+ */
+function renderResearchTree(branchKey) {
+  const branch = RESEARCH_TREE[branchKey];
+  if (!branch) return '<div style="color:var(--warn)">Unknown branch</div>';
+
+  const rows = branch.items.map(item => {
+    const status = getResearchStatus(item.id);
+    const isDone = status === 'done';
+    const isAvail = status === 'available';
+    const isLocked = status === 'locked';
+
+    // Cost display
+    let costStr = item.cost === 0 ? 'FREE' : `${item.cost} RP`;
+    // Apply grand unified discount hint
+    if (!isDone && item.cost > 0 && state.researchV2 && state.researchV2.has('grandUnifiedTheory')) {
+      const discounted = Math.floor(item.cost * 0.70);
+      costStr = `<span style="text-decoration:line-through;color:var(--muted)">${item.cost}</span> ${discounted} RP`;
+    }
+
+    // Prereq badges
+    const prereqBadges = item.prereqs.map(req => {
+      const reqItem = RESEARCH_TREE_INDEX[req];
+      const reqDone = state.researchV2 && state.researchV2.has(req);
+      const badgeColor = reqDone ? 'var(--mil)' : 'var(--warn)';
+      const badgeName = reqItem ? reqItem.name : req;
+      return `<span style="font-size:9px;padding:1px 5px;border:1px solid ${badgeColor};color:${badgeColor};margin-right:3px;white-space:nowrap">${badgeName}</span>`;
+    }).join('');
+
+    // Button
+    let btn = '';
+    if (isDone) {
+      btn = `<span style="color:var(--mil);font-size:11px;font-weight:900;letter-spacing:1px">✓ DONE</span>`;
+    } else if (isAvail) {
+      btn = `<button class="gal-btn mil" onclick="doResearchV2('${item.id}');openResearchScreen()" style="flex-shrink:0"><div class="gal-btn-inner" style="padding:5px 10px;font-size:9px;letter-spacing:1px">RESEARCH</div></button>`;
+    } else {
+      btn = `<button class="gal-btn steel" style="flex-shrink:0;opacity:0.45;pointer-events:none"><div class="gal-btn-inner" style="padding:5px 10px;font-size:9px">LOCKED</div></button>`;
+    }
+
+    // Card opacity
+    const opacity = isLocked ? '0.55' : '1';
+    // Card border accent
+    const borderColor = isDone ? 'var(--mil)' : isAvail ? branch.color : 'var(--edge)';
+
+    return `
+      <div style="opacity:${opacity};display:flex;align-items:center;gap:10px;padding:10px 12px;
+        background:var(--plate2);border-left:3px solid ${borderColor};
+        border-bottom:1px solid #0d0f08;margin-bottom:5px;position:relative">
+        <div style="font-size:22px;width:28px;text-align:center;flex-shrink:0">${item.icon}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">
+            ${isDone ? '✓ ' : ''}${item.name}
+          </div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:3px">${item.desc}</div>
+          ${prereqBadges ? `<div style="margin-bottom:3px">${prereqBadges}</div>` : ''}
+          <div style="font-size:10px;color:var(--rust);font-weight:700">${costStr}</div>
+        </div>
+        <div style="flex-shrink:0">${btn}</div>
+      </div>`;
+  }).join('');
+
+  return `<div style="padding:4px 0">${rows}</div>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI — TABBED RESEARCH SCREEN HTML
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Tracks the active research tab between renders
+let _activeResearchTab = 'military';
+
+/**
+ * Returns the full HTML for the tabbed research screen.
+ * Embeds tab click handlers that call openResearchScreen(tabKey).
+ */
+function getResearchScreenHTML(activeTab) {
+  if (activeTab) _activeResearchTab = activeTab;
+  const tab = _activeResearchTab;
+
+  // Tab bar
+  const tabBar = Object.entries(RESEARCH_TREE).map(([key, branch]) => {
+    const isActive = key === tab;
+    // Count done/total for badge
+    const total = branch.items.length;
+    const done  = branch.items.filter(it => state.researchV2 && state.researchV2.has(it.id)).length;
+    const badgeStyle = `font-size:9px;padding:1px 4px;border-radius:2px;margin-left:4px;background:${isActive ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.08)'};color:${done === total ? 'var(--mil)' : 'var(--muted)'}`;
+    const activeStyle = isActive
+      ? `border-bottom:2px solid ${branch.color};color:var(--text);background:var(--plate2)`
+      : 'border-bottom:2px solid transparent;color:var(--muted);background:transparent';
+    return `<button onclick="openResearchScreen('${key}')" style="
+      flex:1;padding:7px 2px;font-size:10px;font-weight:900;letter-spacing:0.5px;
+      text-transform:uppercase;font-family:inherit;border:none;cursor:pointer;
+      ${activeStyle};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+      ${branch.icon} ${branch.label.split(' ')[0]}
+      <span style="${badgeStyle}">${done}/${total}</span>
+    </button>`;
+  }).join('');
+
+  // Summary bar: current research points
+  const rp = Math.floor(state.res.research || 0);
+  const summaryBar = `<div style="display:flex;justify-content:space-between;align-items:center;
+    padding:6px 12px;background:#0d100a;border-bottom:1px solid var(--edge);font-size:11px">
+    <span style="color:var(--muted);letter-spacing:1px">RESEARCH POINTS</span>
+    <span style="color:var(--gold);font-weight:900">${rp} RP</span>
+  </div>`;
+
+  // Active branch header
+  const activeBranch = RESEARCH_TREE[tab];
+  const branchHeader = `<div style="padding:10px 12px 6px;border-bottom:1px solid var(--edge)">
+    <div style="font-size:13px;font-weight:900;letter-spacing:2px;text-transform:uppercase;
+      color:${activeBranch.color}">
+      ${activeBranch.icon} ${activeBranch.label}
+    </div>
+  </div>`;
+
+  // Tree content
+  const treeContent = renderResearchTree(tab);
+
+  return `
+    <div style="display:flex;flex-direction:column;height:100%">
+      ${summaryBar}
+      <div style="display:flex;border-bottom:1px solid var(--edge);flex-shrink:0;overflow-x:auto;background:var(--plate)">
+        ${tabBar}
+      </div>
+      ${branchHeader}
+      <div style="flex:1;overflow-y:auto;padding:8px 4px 24px">
+        ${treeContent}
+      </div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OPEN RESEARCH SCREEN (integration point)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Shows the research tree in the building detail area.
+ * Replace the openBuilding call for researchCenter with this.
+ *
+ * Call as: openResearchScreen()          — uses last active tab
+ *          openResearchScreen('fleet')   — opens a specific tab
+ */
+function openResearchScreen(tabKey) {
+  // Ensure state is initialized
+  if (!state.researchV2) initResearchV2();
+  if (tabKey) _activeResearchTab = tabKey;
+
+  // Use the existing building detail overlay mechanism
+  // We inject into the roster panel of the open building detail screen
+  const html = getResearchScreenHTML(_activeResearchTab);
+
+  // Target the roster/body area used by openBuilding
+  const rosterEl = document.getElementById('bldg-roster');
+  if (rosterEl) {
+    rosterEl.innerHTML = html;
+    return;
+  }
+
+  // Fallback: use modal if bldg-roster not present
+  const modalBody = document.getElementById('modal-body');
+  if (modalBody) {
+    modalBody.innerHTML = html;
+    return;
+  }
+
+  // Final fallback: build an overlay
+  let overlay = document.getElementById('research-v2-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'research-v2-overlay';
+    overlay.style.cssText = `position:fixed;inset:0;z-index:8000;background:var(--bg);
+      display:flex;flex-direction:column;max-width:540px;margin:0 auto;overflow:hidden`;
+    // Close button bar
+    const closeBar = document.createElement('div');
+    closeBar.style.cssText = `display:flex;align-items:center;justify-content:space-between;
+      padding:8px 14px;background:var(--plate);border-bottom:2px solid var(--edge)`;
+    closeBar.innerHTML = `<span style="font-size:13px;font-weight:900;letter-spacing:2px;color:var(--rust)">RESEARCH CENTER</span>
+      <button onclick="document.getElementById('research-v2-overlay').remove()"
+        style="background:var(--plate);border:1px solid var(--edge);color:var(--steel);
+        padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700;font-family:inherit;
+        text-transform:uppercase">✕ CLOSE</button>`;
+    const body = document.createElement('div');
+    body.id = 'research-v2-body';
+    body.style.cssText = 'flex:1;overflow:hidden;display:flex;flex-direction:column';
+    overlay.appendChild(closeBar);
+    overlay.appendChild(body);
+    document.getElementById('app').appendChild(overlay);
+  }
+  const body = document.getElementById('research-v2-body');
+  if (body) body.innerHTML = html;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INTEGRATION HOOK: patch openBuilding for researchCenter
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Call patchResearchCenterBuilding() once at game start to redirect
+ * the Research Center building detail to use the V2 tree.
+ *
+ * This stores the original openBuilding and wraps it.
+ */
+function patchResearchCenterBuilding() {
+  if (typeof openBuilding !== 'function') return;
+  const _origOpenBuilding = openBuilding;
+  window.openBuilding = function(bldg, contIdx) {
+    if (bldg && bldg.type === 'researchCenter') {
+      // Store selection state for re-render
+      state.selBldg = bldg;
+      if (contIdx !== undefined) state.selCont = contIdx;
+      openResearchScreen(_activeResearchTab);
+      return;
+    }
+    return _origOpenBuilding.apply(this, arguments);
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SAVE / LOAD HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Serializes state.researchV2 to a plain array for JSON save.
+ */
+function saveResearchV2() {
+  return state.researchV2 ? [...state.researchV2] : [];
+}
+
+/**
+ * Restores state.researchV2 from a plain array loaded from JSON save.
+ */
+function loadResearchV2(arr) {
+  state.researchV2 = new Set(Array.isArray(arr) ? arr : []);
+  applyResearchEffects();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BONUS SUMMARY HTML (for tooltips / info panels)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns a compact HTML snippet listing all active non-zero bonuses.
+ * Useful for a "Current Bonuses" info panel.
+ */
+function getResearchBonusSummaryHTML() {
+  const lines = [];
+
+  const pct = v => `+${Math.round(v * 100)}%`;
+
+  const checks = [
+    ['troopAtk_infantry',  '🪖 Infantry ATK'],
+    ['troopAtk_cavalry',   '🐎 Cavalry ATK'],
+    ['troopAtk_tanks',     '🛡️ Tank ATK'],
+    ['troopAtk_all',       '⚔️ All Troops ATK'],
+    ['troopDef_infantry',  '🪖 Infantry DEF'],
+    ['troopDef_cavalry',   '🐎 Cavalry DEF'],
+    ['troopDef_tanks',     '🛡️ Tank DEF'],
+    ['troopDef_all',       '⚔️ All Troops DEF'],
+    ['troopSpd_all',       '💨 All Troops SPD'],
+    ['troopHp_all_t3',     '💪 T3 Troop HP'],
+    ['troopProd_all',      '⏱ Troop Production'],
+    ['buildSpd',           '🔧 Build Speed'],
+    ['bldgHp',             '🏛 Building HP'],
+    ['prodBonus_all',      '⚙️ Production (all)'],
+    ['prodBonus_tradePost','💰 Trade Post'],
+    ['prodBonus_farm',     '🌾 Farm Output'],
+    ['prodBonus_agriWorld','🌳 Agri-world Food'],
+    ['energyProd',         '⚡ Energy Production'],
+    ['energyEff',          '💡 Energy Efficiency'],
+    ['researchProd',       '🔬 Research Output'],
+    ['shipHp',             '🚀 Ship HP'],
+    ['shipAtk',            '🔫 Ship ATK'],
+    ['shipSpd',            '🔥 Ship Speed'],
+    ['storeCap_all',       '📦 Storage Capacity'],
+    ['terraformSpd',       '🌱 Terraform Speed'],
+  ];
+
+  for (const [key, label] of checks) {
+    const val = _researchBonuses[key];
+    if (val && val > 0) {
+      lines.push(`<span style="color:var(--mil)">${label}: <strong>${pct(val)}</strong></span>`);
+    }
+  }
+
+  // Unlocks
+  const unlockLabels = {
+    advConstruction:  '🏗️ Level 2 Buildings',
+    megaStructures:   '🏛️ Level 3 Buildings',
+    siegeEngine:      '💣 Siege Engine',
+    orbitalDrop:      '🚀 Orbital Drop',
+    allT3TroopsFree:  '👑 T3 Troops Free',
+    gridExpansion:    '📐 Grid Expansion',
+    carrierShip:      '🛸 Carrier Ship',
+    capitalShip:      '💥 Capital Ship Doctrine',
+    dreadnaught:      '🌀 Dreadnaught (Science)',
+    deepCoreMining:   '⛏️ Deep Core Mining',
+    surplusExport:    '📦 Surplus Export',
+    planetDetails:    '🌍 Planet Details',
+    automatedSystems: '🤖 Automated Systems',
+  };
+  for (const [key, label] of Object.entries(unlockLabels)) {
+    if (_researchBonuses[`unlock_${key}`]) {
+      lines.push(`<span style="color:var(--gold)">✓ ${label}</span>`);
+    }
+  }
+
+  if (lines.length === 0) {
+    return `<div style="color:var(--muted);font-size:10px">No active research bonuses.</div>`;
+  }
+
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;font-size:10px">${lines.map(l => `<div>${l}</div>`).join('')}</div>`;
+}
+
+// ═══ END RESEARCH V2 ═══
+
+// ═══ SHIPS V2 ═══
+// Deep spaceship fleet system for Legion Galaxy
+// Integrates with state.res, nextUid(), toast(), fmt(), showScreen(), renderAllResBars()
+
+// ─── Ship Definitions ───────────────────────────────────────────────────────
+
+const SHIP_DEFS = {
+  miner: {
+    name: 'Miner',
+    icon: '⛏️',
+    role: 'Automated resource harvester from asteroid belts and planet surfaces',
+    hp: 200, atk: 10, spd: 1,
+    upkeep: { metal: 50, food: 30, energy: 0, credits: 0 },
+    cost: { metal: 3000, food: 1500, research: 500, credits: 0 },
+    buildTime: 120,
+    maxPerFleet: null,
+    requiresResearch: null,
+    color: 'steel',
+  },
+  fighter: {
+    name: 'Fighter',
+    icon: '✈️',
+    role: 'Swarm attacker, carried inside Carriers or based at Spaceport',
+    hp: 40, atk: 35, spd: 8,
+    upkeep: { metal: 10, food: 5, energy: 0, credits: 0 },
+    cost: { metal: 500, food: 200, research: 100, credits: 0 },
+    buildTime: 20,
+    maxPerFleet: 20,
+    requiresResearch: null,
+    color: 'mil',
+  },
+  carrier: {
+    name: 'Carrier',
+    icon: '🛸',
+    role: 'Carries up to 8 fighters, provides fighter resupply in deep space',
+    hp: 800, atk: 20, spd: 2,
+    upkeep: { metal: 200, food: 150, energy: 50, credits: 0 },
+    cost: { metal: 8000, food: 4000, research: 2000, credits: 500 },
+    buildTime: 300,
+    maxPerFleet: null,
+    fighterCapacity: 8,
+    requiresResearch: null,
+    color: 'rust',
+  },
+  cruiser: {
+    name: 'Cruiser',
+    icon: '🚀',
+    role: 'Versatile warship for planetary assault and fleet battles',
+    hp: 600, atk: 80, spd: 3,
+    upkeep: { metal: 300, food: 200, energy: 80, credits: 0 },
+    cost: { metal: 12000, food: 6000, research: 3000, credits: 1000 },
+    buildTime: 480,
+    maxPerFleet: null,
+    requiresResearch: null,
+    color: 'blood',
+  },
+  dreadnaught: {
+    name: 'Dreadnaught',
+    icon: '💥',
+    role: 'Ultimate fleet flagship — devastates planetary defenses and fleets',
+    hp: 5000, atk: 300, spd: 1,
+    upkeep: { metal: 1000, food: 800, energy: 300, credits: 200 },
+    cost: { metal: 50000, food: 25000, research: 10000, credits: 5000 },
+    buildTime: 1800,
+    maxPerFleet: 1,  // 1 per spaceport
+    requiresResearch: 'dreadnaught_unlock',
+    color: 'gold',
+  },
+};
+
+// ─── Variant Definitions ────────────────────────────────────────────────────
+
+const SHIP_VARIANTS = {
+  // Miner variants
+  deepCore: {
+    name: 'Deep Core Miner',
+    desc: '+50% resource yield, costs 50% more metal upkeep',
+    parentClass: 'miner',
+    icon: '🔴',
+    modifiers: { upkeep: { metal: 1.5 }, yieldBonus: 1.5 },
+    costMult: 1.0,
+  },
+  stealth: {
+    name: 'Stealth Surveyor',
+    desc: 'Can scout enemy planets without being detected',
+    parentClass: 'miner',
+    icon: '👁️',
+    modifiers: { canStealthScout: true },
+    costMult: 1.0,
+  },
+  // Fighter variants
+  interceptor: {
+    name: 'Interceptor',
+    desc: 'SPD +50%, ATK -20% — optimized for anti-missile defense',
+    parentClass: 'fighter',
+    icon: '⚡',
+    modifiers: { spd: 1.5, atk: 0.8 },
+    costMult: 1.0,
+  },
+  bomber: {
+    name: 'Bomber',
+    desc: 'ATK ×2 vs buildings, SPD -30% — heavy strike craft',
+    parentClass: 'fighter',
+    icon: '💣',
+    modifiers: { atk: 1.0, spd: 0.7, atkVsBuildings: 2.0 },
+    costMult: 1.0,
+  },
+  // Carrier variants
+  assaultCarrier: {
+    name: 'Assault Carrier',
+    desc: 'Capacity 12 fighters, HP -20% — more fighters, less armor',
+    parentClass: 'carrier',
+    icon: '⚔️',
+    modifiers: { hp: 0.8, fighterCapacity: 12 },
+    costMult: 1.2,
+  },
+  fortressCarrier: {
+    name: 'Fortress Carrier',
+    desc: 'HP ×1.5, capacity 4 fighters, has shields — survivability focused',
+    parentClass: 'carrier',
+    icon: '🛡️',
+    modifiers: { hp: 1.5, fighterCapacity: 4, hasShields: true },
+    costMult: 1.3,
+  },
+  // Cruiser variants
+  siege: {
+    name: 'Siege Cruiser',
+    desc: 'ATK ×2 vs planet defenses, HP -25% — specialized for assault',
+    parentClass: 'cruiser',
+    icon: '🏹',
+    modifiers: { hp: 0.75, atkVsDefenses: 2.0 },
+    costMult: 1.1,
+  },
+  ewCruiser: {
+    name: 'Electronic Warfare Cruiser',
+    desc: 'Jamming — reduces enemy Defense Grid effectiveness by 50%',
+    parentClass: 'cruiser',
+    icon: '📡',
+    modifiers: { jammingAura: 0.5 },
+    costMult: 1.15,
+  },
+  strike: {
+    name: 'Strike Cruiser',
+    desc: 'SPD ×1.5, ATK +20%, HP -10% — fast and aggressive',
+    parentClass: 'cruiser',
+    icon: '🌩️',
+    modifiers: { spd: 1.5, atk: 1.2, hp: 0.9 },
+    costMult: 1.1,
+  },
+  // Dreadnaught variants
+  siegeDread: {
+    name: 'Siege Dreadnaught',
+    desc: 'ATK ×1.5 vs defenses, orbital bombardment ability',
+    parentClass: 'dreadnaught',
+    icon: '☄️',
+    modifiers: { atkVsDefenses: 1.5, orbitalBombardment: true },
+    costMult: 1.2,
+  },
+  commandDread: {
+    name: 'Command Dreadnaught',
+    desc: 'All ships in same fleet +20% stats, acts as fleet command',
+    parentClass: 'dreadnaught',
+    icon: '👑',
+    modifiers: { fleetAura: 1.2 },
+    costMult: 1.25,
+  },
+};
+
+// ─── State Initialization ───────────────────────────────────────────────────
+
+function initFleet() {
+  if (!state.fleet) {
+    state.fleet = {
+      ships: [],
+      buildQueue: [],
+    };
+  }
+  if (!state.fleet.ships) state.fleet.ships = [];
+  if (!state.fleet.buildQueue) state.fleet.buildQueue = [];
+}
+
+// ─── Helper: compute final stats for a ship class+variant ──────────────────
+
+function _shipFinalStats(shipClass, variant) {
+  const def = SHIP_DEFS[shipClass];
+  if (!def) return null;
+  let hp = def.hp, atk = def.atk, spd = def.spd;
+  let upkeep = { ...def.upkeep };
+  let fighterCapacity = def.fighterCapacity || 0;
+  let extraFlags = {};
+
+  if (variant) {
+    const vd = SHIP_VARIANTS[variant];
+    if (vd && vd.modifiers) {
+      const m = vd.modifiers;
+      if (m.hp !== undefined) hp = Math.round(hp * m.hp);
+      if (m.atk !== undefined) atk = Math.round(atk * m.atk);
+      if (m.spd !== undefined) spd = Math.round(spd * m.spd * 10) / 10;
+      if (m.fighterCapacity !== undefined) fighterCapacity = m.fighterCapacity;
+      if (m.upkeep) {
+        Object.keys(m.upkeep).forEach(k => {
+          if (upkeep[k] !== undefined) upkeep[k] = Math.round(upkeep[k] * m.upkeep[k]);
+        });
+      }
+      // Copy special flags
+      ['atkVsBuildings','atkVsDefenses','jammingAura','orbitalBombardment','fleetAura','hasShields','canStealthScout','yieldBonus'].forEach(f => {
+        if (m[f] !== undefined) extraFlags[f] = m[f];
+      });
+    }
+  }
+  return { hp, atk, spd, upkeep, fighterCapacity, extraFlags };
+}
+
+function _shipBuildCost(shipClass, variant) {
+  const def = SHIP_DEFS[shipClass];
+  if (!def) return null;
+  let cost = { ...def.cost };
+  if (variant) {
+    const vd = SHIP_VARIANTS[variant];
+    if (vd && vd.costMult && vd.costMult !== 1.0) {
+      Object.keys(cost).forEach(k => {
+        cost[k] = Math.round(cost[k] * vd.costMult);
+      });
+    }
+  }
+  return cost;
+}
+
+// ─── Building Functions ─────────────────────────────────────────────────────
+
+function canBuildShip(shipClass, variant) {
+  initFleet();
+  const def = SHIP_DEFS[shipClass];
+  if (!def) return { ok: false, reason: 'Unknown ship class' };
+
+  // Check spaceport exists
+  const hasSpaceport = state.planet.continents.some(c =>
+    c.conquered && c.bldgs && c.bldgs.some(b => b.type === 'spaceport')
+  );
+  if (!hasSpaceport) return { ok: false, reason: 'No Spaceport constructed' };
+
+  // Check research unlock for dreadnaught
+  if (def.requiresResearch && !state.researchDone.has(def.requiresResearch)) {
+    // Check by name fallback (research might be stored differently)
+    const dreadUnlocked = Array.from(state.researchDone).some(r => r === 'dreadnaught_unlock') ||
+      state.techUnlocked.has('dreadnaught');
+    if (!dreadUnlocked) return { ok: false, reason: 'Requires Dreadnaught research unlock' };
+  }
+
+  // Check max per fleet
+  if (def.maxPerFleet !== null) {
+    const count = state.fleet.ships.filter(s => s.class === shipClass).length +
+      state.fleet.buildQueue.filter(q => q.class === shipClass).length;
+    if (count >= def.maxPerFleet) {
+      return { ok: false, reason: `Max ${def.maxPerFleet} ${def.name}(s) allowed per Spaceport` };
+    }
+  }
+
+  // Fighter cap
+  if (shipClass === 'fighter') {
+    const fighterCount = state.fleet.ships.filter(s => s.class === 'fighter').length +
+      state.fleet.buildQueue.filter(q => q.class === 'fighter').length;
+    if (fighterCount >= 20) return { ok: false, reason: 'Fighter cap reached (20 max)' };
+  }
+
+  const cost = _shipBuildCost(shipClass, variant);
+  if (!cost) return { ok: false, reason: 'Invalid variant' };
+
+  // Validate variant belongs to this class
+  if (variant) {
+    const vd = SHIP_VARIANTS[variant];
+    if (!vd) return { ok: false, reason: 'Unknown variant' };
+    if (vd.parentClass !== shipClass) return { ok: false, reason: 'Variant does not match ship class' };
+  }
+
+  const res = state.res;
+  if (cost.metal > 0 && (res.metal || 0) < cost.metal)
+    return { ok: false, reason: `Need ${fmt(cost.metal)} Metal (have ${fmt(res.metal || 0)})` };
+  if (cost.food > 0 && (res.food || 0) < cost.food)
+    return { ok: false, reason: `Need ${fmt(cost.food)} Food (have ${fmt(res.food || 0)})` };
+  if (cost.research > 0 && (res.research || 0) < cost.research)
+    return { ok: false, reason: `Need ${fmt(cost.research)} Research (have ${fmt(res.research || 0)})` };
+  if (cost.credits > 0 && (res.credits || 0) < cost.credits)
+    return { ok: false, reason: `Need ${fmt(cost.credits)} Credits (have ${fmt(res.credits || 0)})` };
+
+  return { ok: true, reason: null };
+}
+
+function startShipBuild(shipClass, variant) {
+  initFleet();
+  const check = canBuildShip(shipClass, variant);
+  if (!check.ok) { toast('// ' + check.reason.toUpperCase() + ' //'); return; }
+
+  const cost = _shipBuildCost(shipClass, variant);
+  const def = SHIP_DEFS[shipClass];
+
+  // Deduct resources
+  state.res.metal = (state.res.metal || 0) - (cost.metal || 0);
+  state.res.food = (state.res.food || 0) - (cost.food || 0);
+  state.res.research = (state.res.research || 0) - (cost.research || 0);
+  state.res.credits = (state.res.credits || 0) - (cost.credits || 0);
+
+  const vd = variant ? SHIP_VARIANTS[variant] : null;
+  const shipName = vd ? vd.name : def.name;
+  const buildEnd = Date.now() + def.buildTime * 1000;
+
+  state.fleet.buildQueue.push({
+    id: nextUid(),
+    class: shipClass,
+    variant: variant || null,
+    name: shipName,
+    buildEnd,
+    buildStart: Date.now(),
+    buildTime: def.buildTime * 1000,
+  });
+
+  renderAllResBars();
+  toast(`// ${shipName.toUpperCase()} CONSTRUCTION STARTED //`);
+  // Refresh spaceport detail if visible
+  if (typeof _refreshFleetUI === 'function') _refreshFleetUI();
+}
+
+function _shipBuildTick() {
+  if (!state.fleet || !state.fleet.buildQueue || state.fleet.buildQueue.length === 0) return;
+  const now = Date.now();
+  const completed = [];
+  state.fleet.buildQueue = state.fleet.buildQueue.filter(q => {
+    if (now >= q.buildEnd) { completed.push(q); return false; }
+    return true;
+  });
+  completed.forEach(q => {
+    const def = SHIP_DEFS[q.class];
+    const stats = _shipFinalStats(q.class, q.variant);
+    const ship = {
+      id: q.id,
+      class: q.class,
+      variant: q.variant,
+      name: q.name,
+      hp: stats.hp, maxHp: stats.hp,
+      atk: stats.atk, spd: stats.spd,
+      status: 'docked',
+      buildEnd: null,
+      carriedFighters: [],
+      assignedContinent: null,
+      flags: stats.extraFlags,
+    };
+    state.fleet.ships.push(ship);
+    toast(`// ${q.name.toUpperCase()} CONSTRUCTION COMPLETE //`);
+  });
+  if (completed.length > 0 && typeof _refreshFleetUI === 'function') _refreshFleetUI();
+}
+
+// Start the build tick interval (call once on game load)
+function startShipBuildInterval() {
+  if (window._shipBuildIntervalId) clearInterval(window._shipBuildIntervalId);
+  window._shipBuildIntervalId = setInterval(_shipBuildTick, 1000);
+}
+
+// ─── Upkeep Functions ───────────────────────────────────────────────────────
+
+function calcFleetUpkeep() {
+  initFleet();
+  const total = { metal: 0, food: 0, energy: 0, credits: 0 };
+  state.fleet.ships.forEach(ship => {
+    const stats = _shipFinalStats(ship.class, ship.variant);
+    if (!stats) return;
+    total.metal += stats.upkeep.metal || 0;
+    total.food += stats.upkeep.food || 0;
+    total.energy += stats.upkeep.energy || 0;
+    total.credits += stats.upkeep.credits || 0;
+  });
+  return total;
+}
+
+function applyFleetUpkeep() {
+  initFleet();
+  if (state.fleet.ships.length === 0) return;
+  const upkeep = calcFleetUpkeep();
+  const res = state.res;
+
+  // Warn if any resource is critically short
+  const metalShort = (res.metal || 0) < upkeep.metal;
+  const foodShort = (res.food || 0) < upkeep.food;
+  const energyShort = (res.energy || 0) < upkeep.energy;
+  const creditsShort = (res.credits || 0) < upkeep.credits;
+
+  if (metalShort || foodShort || energyShort || creditsShort) {
+    // Decommission the most expensive ship if fully bankrupt
+    const totalIncome = _estimateTotalIncome();
+    const canAffordAny = (res.metal + res.food + res.energy + res.credits) > 0;
+    if (!canAffordAny || (metalShort && foodShort)) {
+      // Decommission most expensive ship
+      let mostExpensive = null, maxCost = -1;
+      state.fleet.ships.forEach(ship => {
+        const stats = _shipFinalStats(ship.class, ship.variant);
+        const totalUpkeep = stats.upkeep.metal + stats.upkeep.food + stats.upkeep.energy + stats.upkeep.credits;
+        if (totalUpkeep > maxCost) { maxCost = totalUpkeep; mostExpensive = ship; }
+      });
+      if (mostExpensive) {
+        state.fleet.ships = state.fleet.ships.filter(s => s.id !== mostExpensive.id);
+        toast(`// ${mostExpensive.name.toUpperCase()} DECOMMISSIONED — BANKRUPT //`);
+      }
+      return;
+    }
+    toast('// FLEET UPKEEP WARNING: LOW RESOURCES //');
+  }
+
+  // Deduct upkeep
+  res.metal = Math.max(0, (res.metal || 0) - upkeep.metal);
+  res.food = Math.max(0, (res.food || 0) - upkeep.food);
+  res.energy = Math.max(0, (res.energy || 0) - upkeep.energy);
+  res.credits = Math.max(0, (res.credits || 0) - upkeep.credits);
+}
+
+function _estimateTotalIncome() {
+  // Rough estimate from buildings — used for upkeep warning threshold
+  let metal = 0, food = 0;
+  state.planet.continents.forEach(c => {
+    if (!c.conquered || !c.bldgs) return;
+    c.bldgs.forEach(b => {
+      if (b.type === 'resourceCollector') metal += 15 * (b.level || 1);
+      if (b.type === 'farm') food += 12 * (b.level || 1);
+    });
+  });
+  return { metal, food };
+}
+
+// ─── Ship Assignment ────────────────────────────────────────────────────────
+
+function assignShip(shipId, role, contIdx) {
+  initFleet();
+  const ship = state.fleet.ships.find(s => s.id === shipId);
+  if (!ship) { toast('// SHIP NOT FOUND //'); return; }
+
+  const validRoles = ['docked', 'patrolling', 'mining'];
+  if (!validRoles.includes(role)) { toast('// INVALID ROLE //'); return; }
+
+  if (role === 'patrolling' || role === 'mining') {
+    if (contIdx === undefined || contIdx === null) {
+      toast('// ASSIGN CONTINENT FOR THIS ROLE //'); return;
+    }
+    const cont = state.planet.continents[contIdx];
+    if (!cont || !cont.conquered) { toast('// CONTINENT NOT CONTROLLED //'); return; }
+    ship.assignedContinent = contIdx;
+  } else {
+    ship.assignedContinent = null;
+  }
+
+  ship.status = role;
+  toast(`// ${ship.name.toUpperCase()} STATUS: ${role.toUpperCase()} //`);
+  if (typeof _refreshFleetUI === 'function') _refreshFleetUI();
+}
+
+function renameShip(shipId, newName) {
+  initFleet();
+  const ship = state.fleet.ships.find(s => s.id === shipId);
+  if (!ship) return;
+  const trimmed = newName.trim().slice(0, 24);
+  if (!trimmed) return;
+  ship.name = trimmed;
+  if (typeof _refreshFleetUI === 'function') _refreshFleetUI();
+}
+
+// ─── UI Helpers ─────────────────────────────────────────────────────────────
+
+function _hpBarHTML(hp, maxHp) {
+  const pct = Math.max(0, Math.min(100, Math.round((hp / maxHp) * 100)));
+  const col = pct > 60 ? 'var(--mil)' : pct > 30 ? 'var(--rust)' : 'var(--blood)';
+  return `<div style="height:4px;background:#1a1e10;border-radius:2px;overflow:hidden;width:100%;margin-top:4px">
+    <div style="height:100%;width:${pct}%;background:${col};transition:width 0.3s"></div>
+  </div><div style="font-size:9px;color:var(--muted);margin-top:2px">${fmt(hp)} / ${fmt(maxHp)} HP</div>`;
+}
+
+function _statusBadge(status) {
+  const cfg = {
+    docked:     { col: 'var(--steel)',  label: 'DOCKED' },
+    patrolling: { col: 'var(--mil)',    label: 'PATROL' },
+    mining:     { col: 'var(--rust)',   label: 'MINING' },
+    building:   { col: 'var(--gold)',   label: 'BUILDING' },
+  };
+  const c = cfg[status] || { col: 'var(--muted)', label: status.toUpperCase() };
+  return `<span style="display:inline-block;background:rgba(0,0,0,0.5);border:1px solid ${c.col};
+    color:${c.col};padding:1px 6px;font-size:9px;font-weight:900;letter-spacing:1px;border-radius:2px">${c.label}</span>`;
+}
+
+function _classColor(cls) {
+  const map = { miner:'steel', fighter:'mil', carrier:'rust', cruiser:'blood', dreadnaught:'gold' };
+  return map[cls] || 'steel';
+}
+
+// ─── Fleet Screen HTML ───────────────────────────────────────────────────────
+
+function getFleetScreenHTML() {
+  initFleet();
+  const sections = [];
+
+  sections.push(getFleetUpkeepHTML());
+  sections.push(getBuildQueueHTML());
+  sections.push(getFleetRosterHTML());
+
+  return sections.join('');
+}
+
+function getFleetRosterHTML() {
+  initFleet();
+  const ships = state.fleet.ships;
+  if (ships.length === 0) {
+    return `<div class="panel steel">
+      <div style="font-size:11px;font-weight:900;letter-spacing:2px;color:var(--muted);text-align:center;padding:12px 0">
+        NO SHIPS IN FLEET<br><span style="font-size:10px;font-weight:400">Build ships at the Spaceport</span>
+      </div>
+    </div>`;
+  }
+
+  const rows = ships.map(ship => {
+    const def = SHIP_DEFS[ship.class];
+    const stats = _shipFinalStats(ship.class, ship.variant);
+    const cls = _classColor(ship.class);
+    const contOptions = state.planet.continents.map((c, i) =>
+      c.conquered ? `<option value="${i}" ${ship.assignedContinent === i ? 'selected' : ''}>${c.name}</option>` : ''
+    ).join('');
+
+    const carrierInfo = (ship.class === 'carrier')
+      ? `<div style="font-size:9px;color:var(--muted);margin-top:3px">
+           Fighters: ${ship.carriedFighters.length}/${stats.fighterCapacity || 8}
+         </div>` : '';
+
+    const variantLabel = ship.variant
+      ? `<span style="font-size:9px;color:var(--gold);display:block;margin-top:1px">${SHIP_VARIANTS[ship.variant].name}</span>` : '';
+
+    return `<div style="display:flex;align-items:flex-start;gap:10px;padding:10px;
+      background:var(--plate2);border-top:1px solid var(--edge);border-bottom:1px solid #0d0f08;
+      border-left:2px solid var(--${cls});margin-bottom:4px">
+      <span style="font-size:24px;flex-shrink:0;width:32px;text-align:center">${def.icon}</span>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:1px">${ship.name}</span>
+          ${_statusBadge(ship.status)}
+        </div>
+        ${variantLabel}
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">
+          ATK ${ship.atk} · SPD ${ship.spd} · Upkeep: ${stats.upkeep.metal}⚙ ${stats.upkeep.food}🌾${stats.upkeep.energy > 0 ? ' ' + stats.upkeep.energy + '⚡' : ''}${stats.upkeep.credits > 0 ? ' ' + stats.upkeep.credits + '¢' : ''}
+        </div>
+        ${_hpBarHTML(ship.hp, ship.maxHp)}
+        ${carrierInfo}
+        <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+          <select onchange="assignShip(${ship.id}, this.value, this.options[this.selectedIndex].dataset.cont)"
+            style="background:var(--plate);border:1px solid var(--edge);color:var(--text);
+            font-family:inherit;font-size:10px;padding:2px 4px;cursor:pointer"
+            data-ship="${ship.id}">
+            <option value="docked" ${ship.status === 'docked' ? 'selected' : ''}>Docked</option>
+            <optgroup label="Patrol">
+              ${state.planet.continents.map((c,i) => c.conquered
+                ? `<option value="patrolling" data-cont="${i}" ${ship.status==='patrolling'&&ship.assignedContinent===i?'selected':''}>${c.name} - Patrol</option>` : '').join('')}
+            </optgroup>
+            ${ship.class === 'miner' ? `<optgroup label="Mine">
+              ${state.planet.continents.map((c,i) => c.conquered
+                ? `<option value="mining" data-cont="${i}" ${ship.status==='mining'&&ship.assignedContinent===i?'selected':''}>${c.name} - Mine</option>` : '').join('')}
+            </optgroup>` : ''}
+          </select>
+          <button onclick="scrapShip(${ship.id})" class="gal-btn blood" style="flex-shrink:0">
+            <div class="gal-btn-inner" style="padding:3px 8px;font-size:9px;letter-spacing:1px">SCRAP</div>
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="panel mil" style="margin-bottom:10px">
+    <div style="font-size:11px;font-weight:900;letter-spacing:2px;color:var(--mil);margin-bottom:8px">
+      ◈ FLEET ROSTER <span style="color:var(--muted);font-weight:400">(${ships.length} ship${ships.length !== 1 ? 's' : ''})</span>
+    </div>
+    ${rows}
+  </div>`;
+}
+
+function getBuildQueueHTML() {
+  initFleet();
+  const queue = state.fleet.buildQueue;
+  if (queue.length === 0) return '';
+
+  const now = Date.now();
+  const rows = queue.map(q => {
+    const elapsed = now - q.buildStart;
+    const pct = Math.min(100, Math.round((elapsed / q.buildTime) * 100));
+    const remaining = Math.max(0, Math.ceil((q.buildEnd - now) / 1000));
+    const mins = Math.floor(remaining / 60);
+    const secs = remaining % 60;
+    const def = SHIP_DEFS[q.class];
+    const cls = _classColor(q.class);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px;
+      background:var(--plate2);border-left:2px solid var(--${cls});margin-bottom:4px">
+      <span style="font-size:20px;flex-shrink:0">${def.icon}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:1px">${q.name}</div>
+        <div style="height:6px;background:#0d0f08;border-radius:3px;overflow:hidden;margin:4px 0">
+          <div style="height:100%;width:${pct}%;background:var(--${cls});transition:width 1s;border-radius:3px"></div>
+        </div>
+        <div style="font-size:9px;color:var(--muted)">${pct}% — ${mins > 0 ? mins + 'm ' : ''}${secs}s remaining</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="panel rust" style="margin-bottom:10px">
+    <div style="font-size:11px;font-weight:900;letter-spacing:2px;color:var(--rust);margin-bottom:8px">
+      ⚙ BUILD QUEUE (${queue.length})
+    </div>
+    ${rows}
+  </div>`;
+}
+
+function getFleetUpkeepHTML() {
+  initFleet();
+  const upkeep = calcFleetUpkeep();
+  const income = _estimateTotalIncome();
+
+  // Determine warning level
+  const metalRatio = income.metal > 0 ? upkeep.metal / income.metal : (upkeep.metal > 0 ? 999 : 0);
+  const foodRatio  = income.food  > 0 ? upkeep.food  / income.food  : (upkeep.food  > 0 ? 999 : 0);
+  const maxRatio = Math.max(metalRatio, foodRatio);
+  const warnCol = maxRatio >= 1.0 ? 'var(--blood)' : maxRatio >= 0.8 ? 'var(--warn)' : 'var(--mil)';
+  const warnMsg = maxRatio >= 1.0 ? '⚠ CRITICAL — FLEET UPKEEP EXCEEDS INCOME' :
+                  maxRatio >= 0.8 ? '⚠ WARNING — UPKEEP NEAR INCOME LIMIT' :
+                  '✓ FLEET SUSTAINABLE';
+
+  if (upkeep.metal === 0 && upkeep.food === 0 && upkeep.energy === 0) {
+    return `<div class="panel steel" style="margin-bottom:10px">
+      <div style="font-size:10px;color:var(--muted);text-align:center;padding:4px 0">No ships — no upkeep</div>
+    </div>`;
+  }
+
+  return `<div class="panel" style="margin-bottom:10px;border-top-color:${warnCol}">
+    <div style="font-size:11px;font-weight:900;letter-spacing:2px;color:${warnCol};margin-bottom:8px">
+      📊 FLEET UPKEEP / TICK
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">
+      ${upkeep.metal > 0 ? `<div style="font-size:11px">⚙ Metal: <span style="color:var(--rust);font-weight:900">${fmt(upkeep.metal)}</span><span style="color:var(--muted);font-size:9px"> / ${fmt(income.metal)} income</span></div>` : ''}
+      ${upkeep.food > 0 ? `<div style="font-size:11px">🌾 Food: <span style="color:var(--rust);font-weight:900">${fmt(upkeep.food)}</span><span style="color:var(--muted);font-size:9px"> / ${fmt(income.food)} income</span></div>` : ''}
+      ${upkeep.energy > 0 ? `<div style="font-size:11px">⚡ Energy: <span style="color:var(--rust);font-weight:900">${fmt(upkeep.energy)}</span></div>` : ''}
+      ${upkeep.credits > 0 ? `<div style="font-size:11px">¢ Credits: <span style="color:var(--rust);font-weight:900">${fmt(upkeep.credits)}</span></div>` : ''}
+    </div>
+    <div style="font-size:10px;font-weight:900;letter-spacing:1px;color:${warnCol}">${warnMsg}</div>
+  </div>`;
+}
+
+// ─── Ship Build Menu HTML ────────────────────────────────────────────────────
+
+function getShipBuildMenuHTML() {
+  const classes = Object.keys(SHIP_DEFS);
+  const tabs = classes.map(cls => {
+    const def = SHIP_DEFS[cls];
+    const col = _classColor(cls);
+    return `<button onclick="fleetSelectClass('${cls}')" id="fleet-tab-${cls}"
+      style="flex:1;padding:6px 4px;font-size:9px;font-weight:900;letter-spacing:1px;
+      text-transform:uppercase;font-family:inherit;cursor:pointer;border:1px solid var(--edge);
+      background:var(--plate);color:var(--muted);transition:all 0.15s"
+      class="fleet-class-tab">${def.icon}<br>${def.name}</button>`;
+  }).join('');
+
+  const panels = classes.map(cls => {
+    const def = SHIP_DEFS[cls];
+    const col = _classColor(cls);
+    const check = canBuildShip(cls, null);
+
+    // Base variant card
+    const baseCost = _shipBuildCost(cls, null);
+    const baseStats = _shipFinalStats(cls, null);
+    const baseCard = _variantCardHTML(cls, null, def, baseCost, baseStats, col);
+
+    // Variant cards
+    const variantKeys = Object.keys(SHIP_VARIANTS).filter(k => SHIP_VARIANTS[k].parentClass === cls);
+    const variantCards = variantKeys.map(vk => {
+      const vd = SHIP_VARIANTS[vk];
+      const cost = _shipBuildCost(cls, vk);
+      const stats = _shipFinalStats(cls, vk);
+      return _variantCardHTML(cls, vk, def, cost, stats, col, vd);
+    }).join('');
+
+    return `<div class="fleet-class-panel" id="fleet-panel-${cls}" style="display:none">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5">${def.role}</div>
+      <div style="font-size:10px;color:var(--steel);margin-bottom:8px">
+        HP ${baseStats.hp} · ATK ${baseStats.atk} · SPD ${baseStats.spd} ·
+        Build time: ${_fmtTime(def.buildTime)} ·
+        Upkeep: ${baseStats.upkeep.metal}⚙ ${baseStats.upkeep.food}🌾${baseStats.upkeep.energy > 0 ? ' ' + baseStats.upkeep.energy + '⚡' : ''}${baseStats.upkeep.credits > 0 ? ' ' + baseStats.upkeep.credits + '¢' : ''}
+      </div>
+      ${!check.ok ? `<div style="font-size:10px;color:var(--blood);font-weight:900;margin-bottom:8px;padding:6px;
+        background:rgba(192,48,16,0.1);border:1px solid var(--blood)">⚠ ${check.reason}</div>` : ''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        ${baseCard}${variantCards}
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="panel rust" style="margin-bottom:10px">
+    <div style="font-size:11px;font-weight:900;letter-spacing:2px;color:var(--rust);margin-bottom:10px">
+      ✦ BUILD NEW SHIP
+    </div>
+    <div style="display:flex;gap:4px;margin-bottom:10px;overflow-x:auto">
+      ${tabs}
+    </div>
+    <div id="fleet-build-panels">
+      ${panels}
+    </div>
+  </div>
+  <scr` + `ipt>
+  (function(){
+    // Show first tab
+    const first = '${classes[0]}';
+    fleetSelectClass(first);
+  })();
+  </scr` + `ipt>`;
+}
+
+function _fmtTime(secs) {
+  if (secs < 60) return secs + 's';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+  return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm';
+}
+
+function _variantCardHTML(cls, variantKey, def, cost, stats, col, vd) {
+  const title = vd ? vd.name : def.name + ' (Standard)';
+  const desc = vd ? vd.desc : 'Standard configuration.';
+  const icon = vd ? vd.icon : def.icon;
+  const check = canBuildShip(cls, variantKey);
+  const btnCol = check.ok ? col : 'steel';
+  const costStr = [
+    cost.metal ? `${fmt(cost.metal)}⚙` : '',
+    cost.food ? `${fmt(cost.food)}🌾` : '',
+    cost.research ? `${fmt(cost.research)}⚛` : '',
+    cost.credits ? `${fmt(cost.credits)}¢` : '',
+  ].filter(Boolean).join(' · ');
+
+  return `<div style="background:var(--plate2);border:1px solid var(--edge);border-top:2px solid var(--${col});padding:8px">
+    <div style="font-size:14px;margin-bottom:4px">${icon}</div>
+    <div style="font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;line-height:1.3">${title}</div>
+    <div style="font-size:9px;color:var(--muted);margin-bottom:6px;line-height:1.4">${desc}</div>
+    <div style="font-size:9px;color:var(--rust);margin-bottom:6px">${costStr}</div>
+    <button class="gal-btn ${btnCol}" onclick="startShipBuild('${cls}', ${variantKey ? `'${variantKey}'` : 'null'})"
+      style="width:100%" ${!check.ok ? 'title="' + check.reason + '"' : ''}>
+      <div class="gal-btn-inner" style="padding:5px 8px;font-size:9px;letter-spacing:1px;width:100%;justify-content:center">
+        ${check.ok ? 'BUILD' : 'LOCKED'}
+      </div>
+    </button>
+  </div>`;
+}
+
+function fleetSelectClass(cls) {
+  document.querySelectorAll('.fleet-class-tab').forEach(t => {
+    t.style.background = 'var(--plate)';
+    t.style.color = 'var(--muted)';
+    t.style.borderColor = 'var(--edge)';
+  });
+  document.querySelectorAll('.fleet-class-panel').forEach(p => p.style.display = 'none');
+  const tab = document.getElementById('fleet-tab-' + cls);
+  const panel = document.getElementById('fleet-panel-' + cls);
+  if (tab) {
+    const col = { miner:'#7a8470', fighter:'#5a8a3c', carrier:'#c87428', cruiser:'#c03010', dreadnaught:'#d4a832' }[cls] || '#7a8470';
+    tab.style.background = 'rgba(0,0,0,0.4)';
+    tab.style.color = col;
+    tab.style.borderColor = col;
+  }
+  if (panel) panel.style.display = 'block';
+}
+
+// ─── Ship Detail HTML ────────────────────────────────────────────────────────
+
+function getShipDetailHTML(shipId) {
+  initFleet();
+  const ship = state.fleet.ships.find(s => s.id === shipId);
+  if (!ship) return '<div class="panel steel">Ship not found.</div>';
+
+  const def = SHIP_DEFS[ship.class];
+  const stats = _shipFinalStats(ship.class, ship.variant);
+  const col = _classColor(ship.class);
+  const vd = ship.variant ? SHIP_VARIANTS[ship.variant] : null;
+
+  const flagsHTML = Object.entries(ship.flags || {}).map(([k, v]) => {
+    const labels = {
+      atkVsBuildings: `ATK ×${v} vs Buildings`,
+      atkVsDefenses: `ATK ×${v} vs Defenses`,
+      jammingAura: `Jamming: Enemy defense -${Math.round((1-v)*100)}%`,
+      orbitalBombardment: 'Orbital Bombardment',
+      fleetAura: `Fleet Aura: +${Math.round((v-1)*100)}% fleet stats`,
+      hasShields: 'Shield Generator',
+      canStealthScout: 'Stealth Scouting',
+      yieldBonus: `Resource Yield +${Math.round((v-1)*100)}%`,
+    };
+    return labels[k] ? `<div style="font-size:9px;color:var(--gold);margin-top:2px">★ ${labels[k]}</div>` : '';
+  }).join('');
+
+  const fighterBay = (ship.class === 'carrier') ? `
+    <div style="margin-top:10px">
+      <div style="font-size:10px;font-weight:900;letter-spacing:1px;color:var(--rust);margin-bottom:4px">FIGHTER BAY</div>
+      <div style="font-size:10px;color:var(--muted)">
+        ${ship.carriedFighters.length} / ${stats.fighterCapacity} fighters loaded
+      </div>
+      <div style="height:4px;background:#0d0f08;border-radius:2px;overflow:hidden;margin-top:4px">
+        <div style="height:100%;width:${Math.round((ship.carriedFighters.length / (stats.fighterCapacity || 1)) * 100)}%;background:var(--mil)"></div>
+      </div>
+    </div>` : '';
+
+  return `<div class="panel ${col}">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <span style="font-size:32px">${def.icon}</span>
+      <div>
+        <div style="font-size:14px;font-weight:900;text-transform:uppercase;letter-spacing:2px">${ship.name}</div>
+        <div style="font-size:10px;color:var(--muted)">${vd ? vd.name : def.name} · ${_statusBadge(ship.status)}</div>
+      </div>
+    </div>
+    ${_hpBarHTML(ship.hp, ship.maxHp)}
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:10px">
+      <div style="text-align:center;background:var(--plate2);padding:6px;border:1px solid var(--edge)">
+        <div style="font-size:16px;font-weight:900;color:var(--blood)">${ship.atk}</div>
+        <div style="font-size:9px;color:var(--muted)">ATK</div>
+      </div>
+      <div style="text-align:center;background:var(--plate2);padding:6px;border:1px solid var(--edge)">
+        <div style="font-size:16px;font-weight:900;color:var(--mil)">${ship.spd}</div>
+        <div style="font-size:9px;color:var(--muted)">SPD</div>
+      </div>
+      <div style="text-align:center;background:var(--plate2);padding:6px;border:1px solid var(--edge)">
+        <div style="font-size:16px;font-weight:900;color:var(--steel)">${ship.maxHp}</div>
+        <div style="font-size:9px;color:var(--muted)">MAX HP</div>
+      </div>
+    </div>
+    <div style="margin-top:8px;font-size:10px;color:var(--muted)">
+      Upkeep: ${stats.upkeep.metal}⚙ · ${stats.upkeep.food}🌾${stats.upkeep.energy > 0 ? ' · ' + stats.upkeep.energy + '⚡' : ''}${stats.upkeep.credits > 0 ? ' · ' + stats.upkeep.credits + '¢' : ''}
+    </div>
+    ${flagsHTML}
+    ${fighterBay}
+    <div style="margin-top:10px">
+      <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:4px">RENAME SHIP</label>
+      <div style="display:flex;gap:6px">
+        <input id="rename-ship-${ship.id}" type="text" value="${ship.name}" maxlength="24"
+          style="flex:1;background:var(--plate2);border:1px solid var(--edge);color:var(--text);
+          font-family:inherit;font-size:11px;padding:5px 8px"
+          onkeydown="if(event.key==='Enter')renameShip(${ship.id},this.value)">
+        <button class="gal-btn steel" onclick="renameShip(${ship.id},document.getElementById('rename-ship-${ship.id}').value)">
+          <div class="gal-btn-inner" style="padding:5px 10px;font-size:9px">RENAME</div>
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── Spaceport Detail HTML ───────────────────────────────────────────────────
+
+function getSpaceportDetailHTML(bldg) {
+  initFleet();
+
+  // Auto-refresh build queue display via polling
+  const refreshScript = `<scr` + `ipt>
+  if(window._fleetUiInterval) clearInterval(window._fleetUiInterval);
+  window._fleetUiInterval = setInterval(function(){
+    const qEl = document.getElementById('fleet-build-queue-live');
+    if(qEl) { qEl.innerHTML = getBuildQueueHTML(); }
+  }, 1000);
+  function _refreshFleetUI(){
+    const el = document.getElementById('fleet-main-container');
+    if(el) el.innerHTML = _getFleetMainContent();
+  }
+  function _getFleetMainContent(){
+    return getFleetUpkeepHTML() + getBuildQueueHTML() + getFleetRosterHTML();
+  }
+  </scr` + `ipt>`;
+
+  return `<div id="fleet-main-container" style="margin-top:8px">
+    ${getFleetUpkeepHTML()}
+    <div id="fleet-build-queue-live">${getBuildQueueHTML()}</div>
+    ${getFleetRosterHTML()}
+  </div>
+  <div style="margin-top:10px">
+    ${getShipBuildMenuHTML()}
+  </div>
+  ${refreshScript}`;
+}
+
+// ─── Scrap / Decommission ────────────────────────────────────────────────────
+
+function scrapShip(shipId) {
+  initFleet();
+  const idx = state.fleet.ships.findIndex(s => s.id === shipId);
+  if (idx === -1) { toast('// SHIP NOT FOUND //'); return; }
+  const ship = state.fleet.ships[idx];
+  // Return 25% of build cost in metal
+  const cost = _shipBuildCost(ship.class, ship.variant);
+  const scrapMetal = Math.round((cost.metal || 0) * 0.25);
+  state.fleet.ships.splice(idx, 1);
+  if (scrapMetal > 0) state.res.metal = (state.res.metal || 0) + scrapMetal;
+  renderAllResBars();
+  toast(`// ${ship.name.toUpperCase()} SCRAPPED — RECOVERED ${fmt(scrapMetal)} METAL //`);
+  if (typeof _refreshFleetUI === 'function') _refreshFleetUI();
+}
+
+// ─── Integration: hook into game tick ───────────────────────────────────────
+// Call initFleet() and startShipBuildInterval() from main game init
+// Call applyFleetUpkeep() from the main resource tick function
+
+// ─── Init on load ────────────────────────────────────────────────────────────
+initFleet();
+startShipBuildInterval();
+
+
 </script>
 </body>
 </html>

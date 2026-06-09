@@ -2283,42 +2283,31 @@ function _drawPlanetHeader(ctx,W,H){
 
 // ── planet disk ──
 function _drawPlanet(ctx,pcx,pcy,pradius,now,W,H){
-  // atmosphere outer glow
-  const atmGrad=ctx.createRadialGradient(pcx,pcy,pradius*0.88,pcx,pcy,pradius*1.18);
-  atmGrad.addColorStop(0,'rgba(60,120,200,0.22)');
-  atmGrad.addColorStop(0.5,'rgba(40,80,160,0.10)');
-  atmGrad.addColorStop(1,'rgba(20,40,100,0)');
-  ctx.fillStyle=atmGrad;
-  ctx.beginPath();ctx.arc(pcx,pcy,pradius*1.18,0,Math.PI*2);ctx.fill();
+  // atmosphere outer glow (simple arc, no gradient+clip)
+  ctx.beginPath();ctx.arc(pcx,pcy,pradius*1.18,0,Math.PI*2);
+  ctx.fillStyle='rgba(40,90,180,0.12)';ctx.fill();
 
-  // ocean base fill
-  const oceanGrad=ctx.createRadialGradient(pcx-pradius*0.2,pcy-pradius*0.2,pradius*0.1,pcx,pcy,pradius);
-  oceanGrad.addColorStop(0,'#1a6080');
-  oceanGrad.addColorStop(0.5,'#0e3858');
-  oceanGrad.addColorStop(1,'#071828');
-  ctx.save();
-  ctx.beginPath();ctx.arc(pcx,pcy,pradius,0,Math.PI*2);ctx.clip();
-  ctx.fillStyle=oceanGrad;ctx.fillRect(pcx-pradius,pcy-pradius,pradius*2,pradius*2);
-  ctx.restore();
+  // ocean base — flat solid fill clipped to circle
+  ctx.beginPath();ctx.arc(pcx,pcy,pradius,0,Math.PI*2);
+  ctx.fillStyle='#1a5878';ctx.fill();
 
-  // subtle spherical shading
-  const sphereHi=ctx.createRadialGradient(pcx-pradius*0.25,pcy-pradius*0.30,pradius*0.05,pcx,pcy,pradius);
-  sphereHi.addColorStop(0,'rgba(80,160,220,0.14)');
-  sphereHi.addColorStop(0.45,'rgba(20,60,100,0.06)');
-  sphereHi.addColorStop(1,'rgba(0,0,0,0.35)');
-  ctx.save();
-  ctx.beginPath();ctx.arc(pcx,pcy,pradius,0,Math.PI*2);ctx.clip();
-  ctx.fillStyle=sphereHi;ctx.fillRect(pcx-pradius,pcy-pradius,pradius*2,pradius*2);
-  ctx.restore();
+  // subtle dark limb shading via second arc stroke
+  ctx.beginPath();ctx.arc(pcx,pcy,pradius,0,Math.PI*2);
+  ctx.strokeStyle='rgba(0,0,0,0.45)';
+  ctx.lineWidth=pradius*0.12;ctx.stroke();
+
+  // bright highlight arc (top-left quadrant) for sphere feel
+  ctx.beginPath();ctx.arc(pcx-pradius*0.18,pcy-pradius*0.18,pradius*0.35,0,Math.PI*2);
+  ctx.fillStyle='rgba(80,160,220,0.09)';ctx.fill();
 
   // planet border
   ctx.beginPath();ctx.arc(pcx,pcy,pradius,0,Math.PI*2);
-  ctx.strokeStyle='rgba(60,120,200,0.35)';
+  ctx.strokeStyle='rgba(80,160,255,0.5)';
   ctx.lineWidth=1.5;ctx.stroke();
 
-  // atmosphere ring (thin bright inner)
+  // atmosphere ring
   ctx.beginPath();ctx.arc(pcx,pcy,pradius*1.015,0,Math.PI*2);
-  ctx.strokeStyle='rgba(100,180,255,0.18)';
+  ctx.strokeStyle='rgba(100,180,255,0.22)';
   ctx.lineWidth=pradius*0.022;ctx.stroke();
 }
 
@@ -2351,7 +2340,6 @@ function _drawContinent(ctx,cont,poly,idx,isSelected,now){
   // terrain fill gradient
   ctx.save();
   _polyPath(ctx,poly);
-  ctx.save();
   ctx.clip();
 
   const [gcx,gcy]=_centroid(poly);

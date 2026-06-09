@@ -97,6 +97,24 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .blood{color:var(--blood)}
 .mil{color:var(--mil)}
 .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px}
+
+/* Improved modal header styling */
+#modal-box { border-radius: 0; border-top: 3px solid var(--rust); }
+
+/* Build menu tab styling */
+.bm-tab { transition: background 0.15s; }
+
+/* Continent info panel */
+.cont-info { border-left: 3px solid var(--rust); padding-left: 10px; }
+
+/* Resource badge improvements */
+.res-badge { border-radius: 2px; font-variant-numeric: tabular-nums; }
+
+/* Topbar glow */
+.topbar { box-shadow: 0 2px 16px rgba(0,0,0,0.8); }
+
+/* Section header line */
+.sec-hdr::after { content: ''; display: block; height: 1px; background: var(--edge); margin-top: 4px; }
 </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/8.1.5/pixi.min.js"></script>
 </head><body>
@@ -360,6 +378,31 @@ const BIOME_COLORS = [
   {base:'#7a1010',mid:'#b02020',hi:'#e04030',name:'VOLCANIC'},
   {base:'#0e5070',mid:'#1880a0',hi:'#30b0d0',name:'OCEAN'},
 ];
+const EARTH_COLORS = [
+  {land:'#4a7a3a', shadow:'#2d5228', name:'TEMPERATE'},
+  {land:'#b89040', shadow:'#8a6820', name:'DESERT'},
+  {land:'#5a7890', shadow:'#3a5868', name:'TUNDRA'},
+  {land:'#6a3828', shadow:'#4a2818', name:'VOLCANIC'},
+  {land:'#3a8868', shadow:'#286048', name:'TROPICAL'},
+];
+const BUILD_CATEGORIES = {
+  production: {
+    label:'⚡ PRODUCTION', icon:'⚡',
+    types:['resourceCollector','farm','powerRelay','excellorantFactory','researchCenter','tradePost','storehouse']
+  },
+  military: {
+    label:'⚔ MILITARY', icon:'⚔',
+    types:['barracks','defenseGrid']
+  },
+  infrastructure: {
+    label:'🏗 INFRA', icon:'🏗',
+    types:['colonyCenter','housingBlock','spaceport','commodityExchange']
+  },
+  special: {
+    label:'🌱 SPECIAL', icon:'🌱',
+    types:['terraformer']
+  },
+};
 const BLOB_SHAPES = [
   '42% 58% 55% 45% / 55% 42% 58% 45%',
   '58% 42% 38% 62% / 42% 60% 40% 58%',
@@ -854,24 +897,64 @@ function canPlace(cont, col, row, type) {
   return true;
 }
 
-function showBuildMenu(contIdx, col, row) {
+function showBuildMenu(contIdx, col, row, activeTab) {
+  activeTab = activeTab || 'production';
   const cont = state.planet.continents[contIdx];
   if (!cont.conquered) { toast('// CONQUER FIRST //'); return; }
-  let html = `<div class="build-menu">`;
-  Object.entries(BUILDING_DEFS).forEach(([type, def]) => {
+
+  const tabBar = Object.entries(BUILD_CATEGORIES).map(([key, cat]) =>
+    `<button onclick="showBuildMenu(${contIdx},${col},${row},'${key}')" style="
+      flex:1;padding:6px 2px;font-size:9px;font-weight:900;letter-spacing:1px;
+      font-family:monospace;border:none;cursor:pointer;
+      background:${key===activeTab?'var(--rust)':'var(--plate2)'};
+      color:${key===activeTab?'#fff':'var(--muted)'};
+      border-bottom:${key===activeTab?'2px solid #fff':'2px solid transparent'}">
+      ${cat.label}
+    </button>`
+  ).join('');
+
+  const cat = BUILD_CATEGORIES[activeTab];
+  let items = '';
+  cat.types.forEach(type => {
+    const def = BUILDING_DEFS[type];
+    if (!def) return;
     const placeable = canPlace(cont, col, row, type);
-    const costStr = Object.entries(def.cost).map(([r, v]) => `${v} ${r}`).join(', ');
-    const canAfford = Object.entries(def.cost).every(([r, v]) => (state.res[r] || 0) >= v);
+    const canAfford = Object.entries(def.cost).every(([r,v]) => (state.res[r]||0) >= v);
     const disabled = (!placeable || !canAfford) ? 'disabled' : '';
-    const reason = !placeable ? ' (no space)' : !canAfford ? ' (insufficient)' : '';
-    html += `<div class="bm-row">
-      <b>${def.name}</b> (${def.w}x${def.h}) — ${def.desc}<br>
-      Cost: ${costStr || 'free'}${reason}<br>
-      <button ${disabled} onclick="buildStructure(${contIdx},${col},${row},'${type}');closeModal()">BUILD</button>
+    const costStr = Object.keys(def.cost).length === 0 ? 'free' :
+      Object.entries(def.cost).map(([r,v]) => `${fmt(v)} ${r}`).join(' · ');
+    const statusColor = !placeable ? 'var(--muted)' : !canAfford ? 'var(--blood)' : 'var(--mil)';
+    const statusText = !placeable ? 'NO SPACE' : !canAfford ? 'NEED RESOURCES' : 'AVAILABLE';
+    const sizeBadge = `${def.w}×${def.h}`;
+    const prodText = def.prod && def.prod.res ? `+${def.prod.base} ${def.prod.res}/tick` : '';
+
+    items += `<div style="padding:10px;background:var(--plate2);border:1px solid var(--edge);margin-bottom:8px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
+        <div>
+          <span style="font-size:11px;font-weight:900;color:var(--text)">${def.name}</span>
+          <span style="font-size:9px;color:var(--muted);margin-left:6px">${sizeBadge}</span>
+          ${prodText ? `<span style="font-size:9px;color:var(--mil);margin-left:6px">${prodText}</span>` : ''}
+        </div>
+        <span style="font-size:9px;font-weight:900;color:${statusColor};letter-spacing:1px">${statusText}</span>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:8px;line-height:1.5">${def.desc}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:10px;color:var(--gold);font-family:monospace">💰 ${costStr}</span>
+        <button ${disabled} onclick="buildStructure(${contIdx},${col},${row},'${type}');closeModal()"
+          style="background:${canAfford&&placeable?'var(--rust)':'var(--plate)'};color:${canAfford&&placeable?'#fff':'var(--muted)'};
+            border:1px solid ${canAfford&&placeable?'var(--rust)':'var(--edge)'};
+            padding:6px 14px;font-size:10px;font-weight:900;font-family:monospace;cursor:pointer;letter-spacing:1px">
+          BUILD
+        </button>
+      </div>
     </div>`;
   });
-  html += '</div>';
-  openModal('Build Structure', html);
+
+  const html = `
+    <div style="display:flex;gap:2px;margin-bottom:12px">${tabBar}</div>
+    ${items || '<div style="color:var(--muted);font-size:11px;text-align:center;padding:20px">No buildings in this category</div>'}
+  `;
+  openModal('// BUILD STRUCTURE //', html);
 }
 
 function buildStructure(contIdx, col, row, type) {
@@ -943,28 +1026,106 @@ function renderContBody() {
   const cont = state.planet.continents[idx];
   if (!cont) return;
   const bribeOpt = getBribeOption(idx);
-  let html = `<div class="cont-info">
-    <div class="cont-stat">Threat: <b>${cont.threat}</b></div>
-    <div class="cont-stat">Status: <b>${cont.conquered ? 'CONQUERED' : 'UNCONQUERED'}</b></div>`;
+  const threatColors = {DORMANT:'var(--mil)',GUARDED:'var(--gold)',FORTIFIED:'var(--blood)'};
+  const threatColor = threatColors[cont.threat] || 'var(--muted)';
+  let html = `<div class="cont-info" style="margin-bottom:10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <span style="font-size:15px;font-weight:900;letter-spacing:2px;color:var(--text)">${cont.name.toUpperCase()}</span>
+      <span style="font-size:10px;font-weight:900;letter-spacing:1px;color:${threatColor};padding:3px 8px;border:1px solid ${threatColor}">${cont.threat}</span>
+    </div>
+    <div style="font-size:10px;color:${cont.conquered?'var(--mil)':'var(--blood)'};font-weight:900;letter-spacing:1px;margin-bottom:10px">
+      ${cont.conquered ? '✓ SECURED' : '✗ UNCONQUERED'}
+    </div>`;
+
   if (!cont.conquered && cont.aliens) {
     const a = cont.aliens;
-    html += `<div class="cont-garrison">Garrison: 🪖${a.infantry} 🚂${a.tanks} 🐴${a.cavalry}</div>`;
-    html += `<button onclick="openInvasion(${idx})">⚔ INVADE</button>`;
-    const bribeDisabled = bribeOpt.canAfford ? '' : 'disabled';
-    html += `<button ${bribeDisabled} onclick="bribeGarrison(${idx})">💰 BRIBE (${fmt(bribeOpt.cost)} cr)</button>`;
+    const total = (a.infantry||0) + (a.tanks||0) + (a.cavalry||0);
+    html += `<div class="panel blood" style="margin-bottom:10px">
+      <div class="sec-hdr">ALIEN GARRISON</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">
+        <div style="text-align:center;padding:6px;background:var(--plate2)">
+          <div style="font-size:16px">🪖</div>
+          <div style="font-size:11px;font-weight:900;color:var(--text)">${a.infantry}</div>
+          <div style="font-size:9px;color:var(--muted)">INFANTRY</div>
+        </div>
+        <div style="text-align:center;padding:6px;background:var(--plate2)">
+          <div style="font-size:16px">🚂</div>
+          <div style="font-size:11px;font-weight:900;color:var(--text)">${a.tanks}</div>
+          <div style="font-size:9px;color:var(--muted)">TANKS</div>
+        </div>
+        <div style="text-align:center;padding:6px;background:var(--plate2)">
+          <div style="font-size:16px">🐴</div>
+          <div style="font-size:11px;font-weight:900;color:var(--text)">${a.cavalry}</div>
+          <div style="font-size:9px;color:var(--muted)">CAVALRY</div>
+        </div>
+      </div>
+      <div style="font-size:9px;color:var(--muted);margin-bottom:10px">Total strength: ${total} units</div>
+      <div style="display:flex;gap:8px">
+        <button class="action-btn blood" style="flex:1" onclick="openInvasion(${idx})">⚔ INVADE</button>
+        <button class="action-btn gold" style="flex:1" ${bribeOpt.canAfford?'':'disabled'} onclick="bribeGarrison(${idx})">💰 BRIBE (${fmt(bribeOpt.cost)} cr)</button>
+      </div>
+    </div>`;
   }
+
   if (cont.conquered) {
-    html += `<button onclick="openTroops(${idx})">🪖 TROOPS</button>`;
-    html += `<button onclick="showBuildMenu(${idx},0,0)">🔨 BUILD</button>`;
-    html += '<div class="bldg-list"><b>Buildings:</b><ul>';
+    const builtCount = cont.bldgs.filter(b=>b.built).length;
+    const buildingCount = cont.bldgs.length;
+    // production summary
+    let prodLines = '';
+    cont.bldgs.filter(b=>b.built).forEach(b=>{
+      const def = BUILDING_DEFS[b.type];
+      if (def && def.prod && def.prod.res) {
+        prodLines += `<div style="display:flex;justify-content:space-between;font-size:10px;padding:3px 0;border-bottom:1px solid var(--edge)">
+          <span style="color:var(--muted)">${def.name} Lv${b.level}</span>
+          <span style="color:var(--mil)">+${def.prod.base * b.level} ${def.prod.res}/tick</span>
+        </div>`;
+      }
+    });
+    const activeOD = cont.bldgs.filter(b=>{const exp=state.overdrive[b._uid];return exp&&Date.now()<exp;}).length;
+    html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">
+      <div style="text-align:center;padding:8px;background:var(--plate2);border:1px solid var(--edge)">
+        <div style="font-size:14px;font-weight:900;color:var(--text)">${buildingCount}</div>
+        <div style="font-size:9px;color:var(--muted)">STRUCTURES</div>
+      </div>
+      <div style="text-align:center;padding:8px;background:var(--plate2);border:1px solid var(--edge)">
+        <div style="font-size:14px;font-weight:900;color:var(--mil)">${builtCount}</div>
+        <div style="font-size:9px;color:var(--muted)">ACTIVE</div>
+      </div>
+      <div style="text-align:center;padding:8px;background:var(--plate2);border:1px solid var(--edge)">
+        <div style="font-size:14px;font-weight:900;color:var(--gold)">${activeOD}</div>
+        <div style="font-size:9px;color:var(--muted)">OVERDRIVE</div>
+      </div>
+    </div>`;
+    if (prodLines) {
+      html += `<div class="panel" style="margin-bottom:10px">
+        <div class="sec-hdr">PRODUCTION SUMMARY</div>
+        ${prodLines}
+      </div>`;
+    }
+    html += `<div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="action-btn mil" style="flex:1" onclick="openTroops(${idx})">🪖 TROOPS</button>
+      <button class="action-btn" style="flex:1" onclick="showBuildMenu(${idx},0,0)">🔨 BUILD</button>
+    </div>`;
+    html += `<div class="sec-hdr">BUILDINGS</div>`;
     cont.bldgs.forEach(b => {
       const def = BUILDING_DEFS[b.type];
-      const status = b.built ? `Lv${b.level}` : `Building... (${Math.max(0, Math.ceil((b.buildEnd - Date.now()) / 1000))}s)`;
+      const isBuilt = b.built;
+      const timeLeft = isBuilt ? 0 : Math.max(0, Math.ceil((b.buildEnd - Date.now()) / 1000));
       const rushCost = 50;
-      const rushBtn = !b.built ? `<button onclick="rushConstruction(${idx},${b._uid},${rushCost})">⚡ Rush (${rushCost}cr)</button>` : '';
-      html += `<li><span onclick="openBuilding(${JSON.stringify(b).replace(/"/g,"'")},${idx})" style="cursor:pointer">${def ? def.name : b.type} [${status}]</span>${rushBtn}</li>`;
+      const odActive = state.overdrive[b._uid] && Date.now() < state.overdrive[b._uid];
+      html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px;background:var(--plate2);border:1px solid ${isBuilt?'var(--edge)':'var(--gold)'};margin-bottom:6px;cursor:pointer" onclick="openBuilding(${JSON.stringify(b).replace(/"/g,'&quot;')},${idx})">
+        <div>
+          <span style="font-size:10px;font-weight:900;color:${isBuilt?'var(--text)':'var(--gold)'}">${def?def.name:b.type}</span>
+          ${odActive?'<span style="font-size:8px;color:var(--gold);margin-left:4px">⚡OD</span>':''}
+          ${isBuilt?`<span style="font-size:9px;color:var(--muted);margin-left:6px">Lv${b.level}</span>`:''}
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          ${!isBuilt?`<span style="font-size:9px;color:var(--gold)">${timeLeft}s</span><button onclick="event.stopPropagation();rushConstruction(${idx},${b._uid},${rushCost})" style="font-size:9px;padding:3px 7px;background:var(--rust);color:#fff;border:none;cursor:pointer">⚡${rushCost}cr</button>`:''}
+          ${isBuilt&&def&&def.prod&&def.prod.res?`<span style="font-size:9px;color:var(--mil)">+${def.prod.base*b.level}${def.prod.res[0]}</span>`:''}
+          <span style="font-size:9px;color:var(--muted)">›</span>
+        </div>
+      </div>`;
     });
-    html += '</ul></div>';
   }
   html += '</div>';
   el.innerHTML = html;
@@ -2143,6 +2304,55 @@ let _globeSelectedIdx  = -1;
 let _globeTouchStartX  = 0;
 let _globeTouchStartY  = 0;
 
+function _genContPoly(seed, cx, cy, rx, ry, pts) {
+  const rng = mkRng(strSeed(seed));
+  const poly = [];
+  for (let i = 0; i < pts; i++) {
+    const angle = (i/pts)*Math.PI*2 - Math.PI/2;
+    const jitter = 0.50 + rng()*0.95;
+    const aOff = (rng()-0.5)*(Math.PI/pts)*0.8;
+    poly.push([cx + Math.cos(angle+aOff)*rx*jitter, cy + Math.sin(angle+aOff)*ry*jitter]);
+  }
+  return poly;
+}
+
+function _getContLayouts(pcx, pcy, r) {
+  return [
+    {cx:pcx-r*0.38,cy:pcy-r*0.30,rx:r*0.28,ry:r*0.23,pts:14,seed:'cont0'},
+    {cx:pcx+r*0.35,cy:pcy-r*0.28,rx:r*0.25,ry:r*0.22,pts:12,seed:'cont1'},
+    {cx:pcx-r*0.10,cy:pcy+r*0.05,rx:r*0.32,ry:r*0.26,pts:16,seed:'cont2'},
+    {cx:pcx-r*0.42,cy:pcy+r*0.38,rx:r*0.22,ry:r*0.20,pts:11,seed:'cont3'},
+    {cx:pcx+r*0.38,cy:pcy+r*0.32,rx:r*0.26,ry:r*0.21,pts:13,seed:'cont4'},
+  ];
+}
+
+function polyToSVGPath(pts) {
+  if (pts.length < 3) return '';
+  const n = pts.length;
+  let d = '';
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[(i-1+n)%n], p1 = pts[i], p2 = pts[(i+1)%n], p3 = pts[(i+2)%n];
+    if (i === 0) d += `M${p1[0].toFixed(1)},${p1[1].toFixed(1)}`;
+    const cp1x = p1[0]+(p2[0]-p0[0])/6, cp1y = p1[1]+(p2[1]-p0[1])/6;
+    const cp2x = p2[0]-(p3[0]-p1[0])/6, cp2y = p2[1]-(p3[1]-p1[1])/6;
+    d += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+  }
+  return d + 'Z';
+}
+
+function _genCloudPath(cx, cy, rx, ry, pts, seed) {
+  const rng = mkRng(strSeed(seed));
+  let d = '';
+  for (let i = 0; i < pts; i++) {
+    const a = (i/pts)*Math.PI*2;
+    const j = 0.4 + rng()*1.1;
+    const x = (cx + Math.cos(a)*rx*j).toFixed(1);
+    const y = (cy + Math.sin(a)*ry*j).toFixed(1);
+    d += (i===0 ? `M${x},${y}` : ` L${x},${y}`);
+  }
+  return d + 'Z';
+}
+
 function renderHome() {
   renderAllResBars();
   const spPanel = document.getElementById('sp-locked');
@@ -2153,109 +2363,132 @@ function renderHome() {
 function renderGlobeView() {
   const list = document.getElementById('continent-list');
   if (!list) return;
-  const W       = Math.max(list.offsetWidth || window.innerWidth || 375, 280);
-  const H       = Math.floor(W * 1.35);
-  const pradius = Math.floor(W * 0.42);
-  const pcx     = Math.floor(W / 2);
-  const pcy     = Math.floor(H * 0.40);
 
-  // stars
+  const W = Math.max(list.offsetWidth || window.innerWidth || 375, 280);
+  const H = Math.floor(W * 1.4);
+  const pr = Math.floor(W * 0.42);
+  const pcx = Math.floor(W / 2);
+  const pcy = Math.floor(pr + W * 0.06);
+
+  const layouts = _getContLayouts(pcx, pcy, pr);
+  const polys = layouts.map((l, i) =>
+    _genContPoly(l.seed + state.planet.continents[i].name, l.cx, l.cy, l.rx, l.ry, l.pts)
+  );
+
+  // --- stars ---
   const rng = mkRng(42);
-  let starHTML = '';
-  for (let i = 0; i < 55; i++) {
-    const sx = (rng() * W).toFixed(0);
-    const sy = (rng() * H).toFixed(0);
-    const sr = (0.8 + rng() * 2.0).toFixed(1);
-    const so = (0.3 + rng() * 0.65).toFixed(2);
-    starHTML += `<div style="position:absolute;left:${sx}px;top:${sy}px;width:${sr}px;height:${sr}px;border-radius:50%;background:rgba(255,255,230,${so});pointer-events:none"></div>`;
+  let stars = '';
+  for (let i = 0; i < 70; i++) {
+    const x=(rng()*W).toFixed(1), y=(rng()*H).toFixed(1);
+    const r=(0.5+rng()*1.8).toFixed(1);
+    const op=(0.3+rng()*0.65).toFixed(2);
+    stars += `<circle cx="${x}" cy="${y}" r="${r}" fill="rgba(255,255,240,${op})"/>`;
   }
 
-  // continent blobs
-  let contHTML = '';
+  // --- continent paths ---
+  let contPaths = '', contLabels = '';
   state.planet.continents.forEach((cont, i) => {
-    const o     = CONT_OFFSETS[i];
-    const biome = BIOME_COLORS[i % BIOME_COLORS.length];
+    const ec = EARTH_COLORS[i % EARTH_COLORS.length];
+    const isSel = i === _globeSelectedIdx;
     const isConq = cont.conquered;
-    const isSel  = (_globeSelectedIdx === i);
-    const bleft  = Math.round(pradius + o.dx * pradius - o.rw * pradius);
-    const btop   = Math.round(pradius + o.dy * pradius - o.rh * pradius);
-    const bw     = Math.round(o.rw * 2 * pradius);
-    const bh     = Math.round(o.rh * 2 * pradius);
-    const fill   = isConq ? biome.hi   : biome.base;
-    const border = isConq ? '#d4a832'  : '#c83010';
-    const shadow = isSel
-      ? `0 0 18px 6px ${isConq ? '#d4a832' : '#ff6020'}`
-      : `0 0 6px 1px rgba(0,0,0,0.6)`;
-    const shape = BLOB_SHAPES[i % BLOB_SHAPES.length];
-    contHTML += `<div
-      data-cont-idx="${i}"
-      style="position:absolute;left:${bleft}px;top:${btop}px;width:${bw}px;height:${bh}px;
-        background:${fill};border:2px solid ${border};
-        border-radius:${shape};box-shadow:${shadow};
-        cursor:pointer;touch-action:manipulation;
-        display:flex;align-items:center;justify-content:center;overflow:hidden;
-        font-size:${Math.max(9,Math.floor(bw/8))}px;font-family:monospace;color:rgba(255,255,255,0.85);
-        text-shadow:0 0 4px rgba(0,0,0,0.8);user-select:none;"
-    >${cont.name}</div>`;
+    const d = polyToSVGPath(polys[i]);
+    const fill = isConq ? ec.land : ec.shadow;
+    const stroke = isConq ? '#d4a832' : 'rgba(0,0,0,0.5)';
+    const sw = isSel ? 3 : isConq ? 1.5 : 0.8;
+    const filterAttr = isSel ? 'filter="url(#sel-glow)"' : '';
+    const pts = polys[i];
+    const cx = (pts.reduce((s,p)=>s+p[0],0)/pts.length).toFixed(1);
+    const cy = (pts.reduce((s,p)=>s+p[1],0)/pts.length).toFixed(1);
+    contPaths += `<path d="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" ${filterAttr} data-cont-idx="${i}" style="cursor:pointer"/>`;
+    const labelColor = isConq ? '#ffe066' : 'rgba(255,255,255,0.7)';
+    contLabels += `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" fill="${labelColor}" font-size="8" font-weight="900" font-family="monospace" letter-spacing="1" style="pointer-events:none">${cont.name.toUpperCase()}</text>`;
+    if (isConq) contLabels += `<text x="${cx}" y="${(parseFloat(cy)+10).toFixed(1)}" text-anchor="middle" fill="#d4a832" font-size="6" font-family="monospace" style="pointer-events:none">✓SECURED</text>`;
   });
 
-  const outerHTML = `<div id="globe-view"
-    style="position:relative;width:${W}px;height:${H}px;
-      background:radial-gradient(ellipse at 50% 42%,#0e1420,#07090f 60%,#020408);
-      overflow:hidden;touch-action:manipulation">
-    ${starHTML}
-    <div style="position:absolute;left:${pcx - pradius - 12}px;top:${pcy - pradius - 12}px;
-      width:${pradius * 2 + 24}px;height:${pradius * 2 + 24}px;border-radius:50%;
-      background:rgba(30,80,200,0.10);pointer-events:none"></div>
-    <div id="planet-disk"
-      style="position:absolute;left:${pcx - pradius}px;top:${pcy - pradius}px;
-        width:${pradius * 2}px;height:${pradius * 2}px;border-radius:50%;
-        background:radial-gradient(circle at 40% 38%,#2080b8,#0e4870 55%,#061828);
-        border:2px solid rgba(80,160,255,0.55);overflow:hidden">
-      ${contHTML}
-    </div>
-    <div style="position:absolute;left:${pcx - 60}px;top:${pcy + pradius + 14}px;
-      font-family:monospace;font-size:14px;color:#80c0ff;text-align:center;width:120px;">
-      ${state.planet.name}
-    </div>
-    <div style="position:absolute;left:0;bottom:8px;right:0;display:flex;justify-content:center;gap:6px;pointer-events:none">
-      ${state.planet.continents.map((c,i) => `<div style="width:8px;height:8px;border-radius:50%;background:${i === _globeSelectedIdx ? '#d4a832' : (c.conquered ? '#40c060' : '#c84010')}"></div>`).join('')}
-    </div>
-    <div style="position:absolute;bottom:24px;left:0;right:0;text-align:center;font-family:monospace;font-size:10px;color:rgba(255,255,255,0.35);pointer-events:none">
-      ${_globeSelectedIdx >= 0 ? 'TAP AGAIN TO OPEN · SWIPE TO CYCLE' : 'TAP CONTINENT TO SELECT'}
-    </div>
-  </div>`;
+  // --- clouds ---
+  const crng = mkRng(99);
+  let clouds = '';
+  for (let i = 0; i < 5; i++) {
+    const cx = pcx + (crng()-0.5)*pr*1.4;
+    const cy = pcy + (crng()-0.5)*pr*1.2;
+    const rx = pr*(0.08+crng()*0.14), ry = pr*(0.04+crng()*0.08);
+    const cd = _genCloudPath(cx, cy, rx, ry, 8, 'cloud'+i);
+    clouds += `<path d="${cd}" fill="rgba(255,255,255,0.50)" style="pointer-events:none"/>`;
+  }
 
-  list.innerHTML = outerHTML;
+  // --- conquest pips ---
+  const conqN = state.planet.continents.filter(c=>c.conquered).length;
+  const pips = Array.from({length:5},(_,i)=>i<conqN?'◆':'◇').join(' ');
+  const footY = pcy + pr + 18;
 
+  list.innerHTML = `<div id="globe-view" style="position:relative;width:${W}px;height:${H}px;background:radial-gradient(ellipse at 50% 42%,#0a1428,#04080f 65%,#010204);overflow:hidden;touch-action:manipulation">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="position:absolute;inset:0;pointer-events:none">
+<defs>
+  <radialGradient id="ocean-rg" cx="38%" cy="35%" r="70%">
+    <stop offset="0%" stop-color="#1a5090"/>
+    <stop offset="50%" stop-color="#0d3b6e"/>
+    <stop offset="100%" stop-color="#061828"/>
+  </radialGradient>
+  <radialGradient id="atm-rg" cx="50%" cy="50%" r="50%">
+    <stop offset="85%" stop-color="rgba(0,0,0,0)"/>
+    <stop offset="100%" stop-color="rgba(60,120,255,0.22)"/>
+  </radialGradient>
+  <filter id="sel-glow" x="-40%" y="-40%" width="180%" height="180%">
+    <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur"/>
+    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <clipPath id="planet-clip"><circle cx="${pcx}" cy="${pcy}" r="${pr}"/></clipPath>
+</defs>
+<!-- stars -->
+${stars}
+<!-- atmosphere outer glow -->
+<circle cx="${pcx}" cy="${pcy}" r="${pr+14}" fill="url(#atm-rg)" style="pointer-events:none"/>
+<!-- atmosphere ring -->
+<circle cx="${pcx}" cy="${pcy}" r="${pr+8}" fill="none" stroke="rgba(80,160,255,0.20)" stroke-width="12"/>
+<!-- ocean disk -->
+<circle cx="${pcx}" cy="${pcy}" r="${pr}" fill="url(#ocean-rg)"/>
+<!-- landmasses + clouds clipped to planet -->
+<g clip-path="url(#planet-clip)" style="pointer-events:all">
+${contPaths}
+${clouds}
+${contLabels}
+</g>
+<!-- limb darkening -->
+<circle cx="${pcx}" cy="${pcy}" r="${pr}" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="${Math.floor(pr*0.08)}"/>
+<!-- border -->
+<circle cx="${pcx}" cy="${pcy}" r="${pr}" fill="none" stroke="rgba(100,180,255,0.35)" stroke-width="1.5"/>
+</svg>
+<!-- planet name + pips -->
+<div style="position:absolute;left:0;top:${footY}px;width:100%;text-align:center;font-family:monospace;pointer-events:none">
+  <div style="font-size:13px;font-weight:900;letter-spacing:3px;color:#80b8ff;text-shadow:0 0 12px rgba(80,160,255,0.6)">${state.planet.name.toUpperCase()}</div>
+  <div style="font-size:11px;color:#c8a020;margin-top:4px;letter-spacing:2px">${pips}</div>
+  <div style="font-size:9px;color:rgba(255,255,255,0.28);margin-top:8px;letter-spacing:1px">${_globeSelectedIdx>=0?'TAP AGAIN TO ENTER · SWIPE TO CYCLE':'TAP A CONTINENT TO SELECT'}</div>
+</div>
+</div>`;
+
+  // attach handlers
   const globeEl = document.getElementById('globe-view');
   if (!globeEl) return;
-
-  globeEl.addEventListener('click', (e) => {
-    const target = e.target.closest('[data-cont-idx]');
-    if (!target) return;
-    const idx = parseInt(target.getAttribute('data-cont-idx'));
-    if (_globeSelectedIdx === idx) {
-      openContinent(idx);
-    } else {
-      _globeSelectedIdx = idx;
-      state.selCont = idx;
-      renderGlobeView();
+  globeEl.addEventListener('click', e => {
+    const t = e.target.closest('[data-cont-idx]');
+    if (t) {
+      const idx = parseInt(t.getAttribute('data-cont-idx'));
+      if (idx === _globeSelectedIdx) { openContinent(idx); }
+      else { _globeSelectedIdx = idx; state.selCont = idx; renderGlobeView(); }
+      return;
     }
+    if (_globeSelectedIdx >= 0) { _globeSelectedIdx = -1; renderGlobeView(); }
   });
-
-  globeEl.addEventListener('touchstart', (e) => {
+  globeEl.addEventListener('touchstart', e => {
     _globeTouchStartX = e.touches[0].clientX;
     _globeTouchStartY = e.touches[0].clientY;
   }, {passive:true});
-
-  globeEl.addEventListener('touchend', (e) => {
+  globeEl.addEventListener('touchend', e => {
     const dx = e.changedTouches[0].clientX - _globeTouchStartX;
     const dy = e.changedTouches[0].clientY - _globeTouchStartY;
     if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-      const dir  = dx < 0 ? 1 : -1;
-      const maxI = state.planet.continents.length - 1;
-      _globeSelectedIdx = Math.min(maxI, Math.max(0, (_globeSelectedIdx < 0 ? 0 : _globeSelectedIdx) + dir));
+      const dir = dx < 0 ? 1 : -1;
+      _globeSelectedIdx = ((_globeSelectedIdx < 0 ? 0 : _globeSelectedIdx) + dir + 5) % 5;
       state.selCont = _globeSelectedIdx;
       renderGlobeView();
     }

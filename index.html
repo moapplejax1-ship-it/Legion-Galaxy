@@ -2448,12 +2448,12 @@ function _drawBuildingIcons(ctx,cont,poly,gcx,gcy,maxR){
     ctx.globalAlpha=0.85;
     ctx.fillText((BLDG_ICONS[type]||'?'),ix,iy);
     if(counts[type]>1){
+      ctx.save();
       ctx.font=`bold ${Math.max(6,maxR*0.09)}px monospace`;
       ctx.fillStyle='#d4a832';
       ctx.globalAlpha=1;
       ctx.fillText('×'+counts[type],ix+maxR*0.1,iy-maxR*0.1);
-      ctx.font=`${Math.max(9,maxR*0.14)}px serif`;
-      ctx.fillStyle='';
+      ctx.restore();
     }
   });
   ctx.globalAlpha=1;
@@ -6486,7 +6486,7 @@ function getFleetRosterHTML() {
         ${_hpBarHTML(ship.hp, ship.maxHp)}
         ${carrierInfo}
         <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
-          <select onchange="assignShip(${ship.id}, this.value, this.options[this.selectedIndex].dataset.cont)"
+          <select onchange="assignShip(${ship.id}, this.value, parseInt(this.options[this.selectedIndex].dataset.cont ?? '', 10) || null)"
             style="background:var(--plate);border:1px solid var(--edge);color:var(--text);
             font-family:inherit;font-size:10px;padding:2px 4px;cursor:pointer"
             data-ship="${ship.id}">

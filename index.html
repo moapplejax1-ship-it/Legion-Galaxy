@@ -1236,7 +1236,7 @@ function renderContBody(){
             <div style="font-size:9px;color:var(--muted)">RIDERS</div></div>
         </div>
         <div class="small-muted mb8">Total defenders: <span style="color:var(--warn);font-weight:900">${total}</span> &nbsp;·&nbsp; Threat: <span style="color:var(--blood);font-weight:900">${cont.threat}</span></div>
-        <div class="small-muted mb12">Your forces: 🪖${state.troops.infantry} 🛡️${state.troops.tanks} 🐎${state.troops.cavalry}</div>
+        <div class="small-muted mb12">Your forces: 🪖${getTotalTroops('infantry')} ⚙️${getTotalTroops('tanks')} 🐎${getTotalTroops('cavalry')}</div>
         <div class="center">
           <button class="gal-btn blood" onclick="openInvasion(${state.selCont})"><div class="gal-btn-inner">⚔ Plan Invasion</div></button>
         </div>
@@ -1353,8 +1353,8 @@ function _makeUnit(side, type, tier, x, y) {
   };
 }
 
-function _genEnemyUnits(aliens) {
-  const rng = mkRng(strSeed(state.planet.continents[state.invasion.contIdx].name + 'v3'));
+function _genEnemyUnits(aliens, contIdx) {
+  const rng = mkRng(strSeed(state.planet.continents[contIdx].name + 'v3'));
   const units = [];
   const place = (type, tier, count) => {
     for (let i = 0; i < count; i++) {
@@ -1389,7 +1389,7 @@ function openInvasion(contIdx) {
     contIdx,
     phase: 'deploy',
     playerUnits: [],
-    enemyUnits: _genEnemyUnits(cont.aliens),
+    enemyUnits: _genEnemyUnits(cont.aliens, contIdx),
     battleResult: null,
     deployType: 'infantry',
     deployTier: 1,
@@ -1637,10 +1637,11 @@ function _endBattle(result) {
 
 function _drawBattlefield(canvas, now) {
   if (!canvas) return;
-  const W = canvas.width || 360;
-  const H = canvas.height || 420;
-  canvas.width = W;
-  canvas.height = H;
+  const parent = canvas.parentElement;
+  const W = Math.max(parent ? (parent.clientWidth || 360) : 360, 280);
+  const H = Math.round(W * 1.1);
+  if (canvas.width !== W) canvas.width = W;
+  if (canvas.height !== H) canvas.height = H;
   const ctx = canvas.getContext('2d');
 
   // Background

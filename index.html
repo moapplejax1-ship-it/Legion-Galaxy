@@ -166,16 +166,11 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
       </div>
     </div>
     <div class="resource-bar" id="res-home"></div>
-    <div class="screen-body">
-      <div class="planet-wrap"><canvas id="home-planet" width="140" height="140"></canvas></div>
-      <div class="center mb8">
-        <div id="planet-name-lbl" style="font-size:20px;font-weight:900;letter-spacing:4px;text-transform:uppercase;color:var(--rust);text-shadow:0 0 10px rgba(200,116,40,0.5)"></div>
-        <div class="conquest-pips mt8" id="conquest-pips"></div>
-        <div id="conquest-lbl" style="font-size:11px;color:var(--muted);letter-spacing:1px"></div>
-      </div>
-      <div class="sec-label">Continents</div>
+    <div class="screen-body" style="padding:0 0 28px">
       <div id="continent-list"></div>
-      <div id="sp-locked" class="panel blood" style="display:none;font-size:12px;color:var(--muted);line-height:1.6"></div>
+      <div style="padding:0 12px">
+        <div id="sp-locked" class="panel blood" style="display:none;font-size:12px;color:var(--muted);line-height:1.6"></div>
+      </div>
     </div>
   </div>
 
@@ -1019,14 +1014,13 @@ function renderAllResBars(){
 function renderHome(){
   renderAllResBars();
   const n=cc();
-  document.getElementById('planet-name-lbl').textContent=state.planet.name.toUpperCase();
-  document.getElementById('conquest-lbl').textContent=`${n}/5 CONTINENTS SECURED`;
-  document.getElementById('conquest-pips').innerHTML=state.planet.continents.map(c=>`<div class="pip ${c.conquered?'done':'empty'}"></div>`).join('');
-  drawPlanet(document.getElementById('home-planet'),[200,116,40],140,true);
   requestAnimationFrame(()=>initGlobeView());
   const locked=document.getElementById('sp-locked');
-  if(spUnlocked()){locked.style.display='none';}
-  else{locked.style.display='block';locked.innerHTML=`<span style="color:var(--blood);font-weight:900">// SPACEPORT LOCKED //</span><br>Secure ${3-n} more continent${3-n!==1?'s':''} to construct a Spaceport.`;}
+  if(locked){
+    const n=cc();
+    if(spUnlocked()){locked.style.display='none';}
+    else{locked.style.display='block';locked.innerHTML=`<span style="color:var(--blood);font-weight:900">// SPACEPORT LOCKED //</span><br>Secure ${3-n} more continent${3-n!==1?'s':''} to construct a Spaceport.`;}
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -2063,13 +2057,13 @@ let _selectedInfoIdx=-1; // which continent's info card is open (-1 = none)
 // pulse timing
 let _pulseT=0;
 
-// ── biome palette per continent index ──
+// ── biome palette per continent index — vivid so they read against dark space ──
 const BIOME_COLORS=[
-  {base:'#1a3d1a', mid:'#2a5e2a', hi:'#3a7a3a', name:'JUNGLE'},   // 0 jungle green
-  {base:'#4a3510', mid:'#7a5820', hi:'#b07830', name:'DESERT'},    // 1 desert tan
-  {base:'#1a2a3a', mid:'#2a4060', hi:'#4a6888', name:'ARCTIC'},    // 2 arctic blue
-  {base:'#2a0808', mid:'#4a1010', hi:'#7a1818', name:'VOLCANIC'},  // 3 volcanic red
-  {base:'#082830', mid:'#0e3d48', hi:'#1a5a6a', name:'OCEAN'},     // 4 ocean teal
+  {base:'#2a6e2a', mid:'#3a9e3a', hi:'#60c850', name:'JUNGLE'},   // 0 vivid green
+  {base:'#8a6020', mid:'#c08830', hi:'#e0b050', name:'DESERT'},    // 1 warm amber
+  {base:'#304870', mid:'#4870a8', hi:'#70a0d8', name:'ARCTIC'},    // 2 ice blue
+  {base:'#7a1010', mid:'#b02020', hi:'#e04030', name:'VOLCANIC'},  // 3 bright red
+  {base:'#0e5070', mid:'#1880a0', hi:'#30b0d0', name:'OCEAN'},     // 4 bright teal
 ];
 
 const BLDG_ICONS={
@@ -2181,7 +2175,7 @@ function _resizeCanvas(){
   const parent=_canvas.parentElement;
   const w=Math.max(parent?parent.clientWidth:0,280);
   _canvas.width=w;
-  _canvas.height=Math.round(w*1.15);
+  _canvas.height=Math.round(w*1.35);
 }
 
 // ── animation loop ──
@@ -2248,14 +2242,43 @@ function renderGlobeView(){
   // ── orbital elements ──
   _drawOrbitalElements(ctx,pcx,pcy,pradius,now);
 
+  // ── planet name + conquest status (top overlay) ──
+  _drawPlanetHeader(ctx,W,H);
+
   // ── info card ──
   const infoIdx=_selectedInfoIdx;
   if(infoIdx>=0 && infoIdx<5){
     _drawInfoCard(ctx,conts[infoIdx],infoIdx,W,H);
   } else {
-    // draw small legend hint
     _drawHint(ctx,W,H);
   }
+}
+
+function _drawPlanetHeader(ctx,W,H){
+  const n=state.planet.continents.filter(c=>c.conquered).length;
+  ctx.save();
+  // planet name
+  ctx.font='bold 15px monospace';
+  ctx.textAlign='center';ctx.textBaseline='top';
+  ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=8;
+  ctx.fillStyle='#e8b840';
+  ctx.fillText(state.planet.name.toUpperCase(),W/2,8);
+  // conquest bar
+  ctx.font='10px monospace';
+  ctx.fillStyle='rgba(200,180,120,0.75)';
+  ctx.fillText(n+'/5 CONTINENTS SECURED',W/2,26);
+  ctx.shadowBlur=0;
+  // pip dots
+  const pipW=8,pipGap=5,totalW=(5*pipW+4*pipGap);
+  const px0=W/2-totalW/2, py0=40;
+  state.planet.continents.forEach((c,i)=>{
+    ctx.beginPath();
+    ctx.arc(px0+i*(pipW+pipGap)+pipW/2, py0+pipW/2, pipW/2, 0, Math.PI*2);
+    ctx.fillStyle=c.conquered?'#60c850':'rgba(255,255,255,0.15)';
+    ctx.fill();
+    if(c.conquered){ctx.strokeStyle='#40a030';ctx.lineWidth=1;ctx.stroke();}
+  });
+  ctx.restore();
 }
 
 // ── planet disk ──
@@ -2270,9 +2293,9 @@ function _drawPlanet(ctx,pcx,pcy,pradius,now,W,H){
 
   // ocean base fill
   const oceanGrad=ctx.createRadialGradient(pcx-pradius*0.2,pcy-pradius*0.2,pradius*0.1,pcx,pcy,pradius);
-  oceanGrad.addColorStop(0,'#0e3d52');
-  oceanGrad.addColorStop(0.5,'#082030');
-  oceanGrad.addColorStop(1,'#040e18');
+  oceanGrad.addColorStop(0,'#1a6080');
+  oceanGrad.addColorStop(0.5,'#0e3858');
+  oceanGrad.addColorStop(1,'#071828');
   ctx.save();
   ctx.beginPath();ctx.arc(pcx,pcy,pradius,0,Math.PI*2);ctx.clip();
   ctx.fillStyle=oceanGrad;ctx.fillRect(pcx-pradius,pcy-pradius,pradius*2,pradius*2);

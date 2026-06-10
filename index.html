@@ -4191,7 +4191,20 @@ function isInGame() {
 }
 
 function startNewGame() {
-  if (hasSave() && !confirm('Starting a new campaign will erase your saved progress. Continue?')) return;
+  if (hasSave()) {
+    openModal('Erase Progress?', `
+      <p>Starting a new campaign will erase your saved progress. Continue?</p>
+      <div style="display:flex;gap:10px;margin-top:14px">
+        <button class="action-btn" onclick="closeModal()">CANCEL</button>
+        <button class="action-btn mil" onclick="closeModal();_confirmNewGame()">ERASE & START</button>
+      </div>
+    `);
+    return;
+  }
+  _confirmNewGame();
+}
+
+function _confirmNewGame() {
   localStorage.removeItem('lg_save');
   localStorage.removeItem('lg_save_time');
   renderFactionSelect();
@@ -4360,10 +4373,13 @@ function devMaxTroops() {
 }
 
 function devResetGame() {
-  if (!confirm('Reset all game progress? This cannot be undone.')) return;
-  localStorage.removeItem('lg_save');
-  localStorage.removeItem('lg_dev');
-  location.reload();
+  openModal('Reset Progress?', `
+    <p>Reset all game progress? This cannot be undone.</p>
+    <div style="display:flex;gap:10px;margin-top:14px">
+      <button class="action-btn" onclick="closeModal()">CANCEL</button>
+      <button class="action-btn mil" onclick="localStorage.removeItem('lg_save');localStorage.removeItem('lg_dev');location.reload()">RESET</button>
+    </div>
+  `);
 }
 
 function openDevPanel() {

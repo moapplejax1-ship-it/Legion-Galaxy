@@ -413,7 +413,7 @@ const STAR_POSITIONS = [
 const TRAVEL_SCALE_MS = 9000;
 
 const SHIP_DEFS = {
-  miner:      {name:'Miner',       hp:200, atk:10,  spd:1, capacity:0, maxFleet:null,
+  miner:      {name:'Miner',       hp:200, atk:10,  spd:1, capacity:200, maxFleet:null,
     cost:{metal:3000,food:1500,research:500},            buildTime:120,
     upkeep:{metal:50,food:5,energy:10,credits:0}},
   fighter:    {name:'Fighter',     hp:40,  atk:35,  spd:8, capacity:0, maxFleet:20,
@@ -2685,10 +2685,38 @@ function getFleetScreenHTML() {
 let _starmapInterval = null;
 let _smSelectedOrigin = null;
 let _smSelectedShips = new Set();
+// Cargo manifest staged for the next dispatch: {res: amount, ...}
+let _smCargoManifest = {};
+const CARGO_RES_LIST = ['metal','food','research','excellorant','energy','credits'];
+
+function _smSetCargoAmount(res, val) {
+  const n = Math.max(0, Math.floor(Number(val) || 0));
+  if (n <= 0) delete _smCargoManifest[res];
+  else _smCargoManifest[res] = n;
+  renderStarMap();
+}
 
 function _starDist(a, b) {
   const pa = STAR_POSITIONS[a], pb = STAR_POSITIONS[b];
   return Math.hypot(pa.x - pb.x, pa.y - pb.y);
+}
+
+// Returns {res, continents} for the world at solar idx (home or off-world colony).
+function _worldPools(idx) {
+  const sol = state.solar[idx];
+  if (sol && sol.isHome) return {res: state.res, continents: state.planet.continents};
+  if (sol && sol.colonized && sol.res && sol.continents) return {res: sol.res, continents: sol.continents};
+  return null;
+}
+
+// Total cargo capacity for a group of ships (sum of miner capacities).
+function _fleetCargoCapacity(shipIds) {
+  let cap = 0;
+  shipIds.forEach(id => {
+    const s = state.fleet.ships.find(sh => sh.id === id);
+    if (s && s.class === 'miner') cap += (SHIP_DEFS.miner.capacity || 0);
+  });
+  return cap;
 }
 
 function _fleetGroupSpeed(shipIds) {
@@ -2700,7 +2728,11 @@ function _fleetGroupSpeed(shipIds) {
   return min === Infinity ? 1 : min;
 }
 
-function sendFleet(fromIdx, toIdx, shipIds) {
+// cargo: optional {res: amount, ...} manifest. Only valid for missions to a
+// friendly/colonized destination (home or sol.colonized). Deducted from the
+// source world's pool immediately on departure ("in transit"). Amounts are
+// clamped to what's available and to the group's total miner cargo capacity.
+function sendFleet(fromIdx, toIdx, shipIds, cargo) {
   if (fromIdx === toIdx) { toast('// SELECT A DIFFERENT DESTINATION //'); return; }
   if (!shipIds || shipIds.length === 0) { toast('// SELECT AT LEAST ONE SHIP //'); return; }
   const ships = shipIds.map(id => state.fleet.ships.find(s => s.id === id)).filter(Boolean);
@@ -2715,10 +2747,32 @@ function sendFleet(fromIdx, toIdx, shipIds) {
     id: state._uid++, shipIds: shipIds.slice(), from: fromIdx, to: toIdx,
     departTime: now, arriveTime: now + travelMs,
   };
+  // Cargo: only allowed when destination is a friendly/colonized world.
+  if (cargo && Object.keys(cargo).length > 0) {
+    const destPools = _worldPools(toIdx);
+    const srcPools = _worldPools(fromIdx);
+    if (destPools && srcPools) {
+      const cap = _fleetCargoCapacity(shipIds);
+      let used = 0;
+      const manifest = {};
+      Object.keys(cargo).forEach(res => {
+        let amt = Math.max(0, Math.floor(cargo[res] || 0));
+        amt = Math.min(amt, srcPools.res[res] || 0);
+        amt = Math.min(amt, cap - used);
+        if (amt > 0) {
+          manifest[res] = amt;
+          used += amt;
+          srcPools.res[res] -= amt;
+        }
+      });
+      if (Object.keys(manifest).length > 0) mission.cargo = manifest;
+    }
+  }
   state.fleet.missions.push(mission);
   ships.forEach(s => { s.status = 'enroute'; });
   toast(`// FLEET DEPARTED FOR ${state.solar[toIdx].name.toUpperCase()} //`);
   _smSelectedShips.clear();
+  _smCargoManifest = {};
   renderStarMap();
 }
 
@@ -2739,6 +2793,19 @@ function _starmapTick() {
       const s = state.fleet.ships.find(sh => sh.id === id);
       if (s) { s.loc = m.to; s.status = 'idle'; }
     });
+    if (m.cargo) {
+      const destPools = _worldPools(m.to);
+      if (destPools) {
+        Object.keys(m.cargo).forEach(res => {
+          destPools.res[res] = (destPools.res[res] || 0) + m.cargo[res];
+        });
+        enforceStorageCaps(destPools.continents, destPools.res);
+        const summary = Object.keys(m.cargo).map(res => `${fmt(m.cargo[res])} ${res}`).join(', ');
+        toast(`// CARGO DELIVERED TO ${state.solar[m.to].name.toUpperCase()}: ${summary} //`);
+        renderAllResBars();
+      }
+      delete m.cargo;
+    }
     toast(`// FLEET ARRIVED AT ${state.solar[m.to].name.toUpperCase()} //`);
   });
   if (document.getElementById('screen-starmap')?.classList.contains('active')) renderStarMap();
@@ -2748,6 +2815,7 @@ function showStarMap() {
   initFleet();
   _smSelectedOrigin = null;
   _smSelectedShips.clear();
+  _smCargoManifest = {};
   renderAllResBars();
   showScreen('starmap');
   renderStarMap();
@@ -2762,6 +2830,7 @@ function closeStarMap() {
 function _smSelectNode(idx) {
   _smSelectedOrigin = (_smSelectedOrigin === idx) ? null : idx;
   _smSelectedShips.clear();
+  _smCargoManifest = {};
   renderStarMap();
 }
 
@@ -2832,6 +2901,8 @@ function renderStarMap() {
       });
     }
     if (dockedShips.length > 0) {
+      const cargoCap = _fleetCargoCapacity([..._smSelectedShips]);
+      const srcPools = _worldPools(origin);
       html += `<div class="sec-hdr" style="margin-top:10px">DESTINATION</div>`;
       state.solar.forEach((dest, dIdx) => {
         if (dIdx === origin) return;
@@ -2841,10 +2912,33 @@ function renderStarMap() {
         const etaStr = _smFormatDuration(etaMs);
         const disabled = _smSelectedShips.size === 0 ? 'disabled' : '';
         const hostile = !!getFleetGarrison(dIdx);
+        const friendly = dest.isHome || dest.colonized;
+        const cargoJSON = JSON.stringify(_smCargoManifest).replace(/"/g, '&quot;');
         html += `<button class="back-btn" style="width:100%;margin-bottom:6px;text-align:left" ${disabled}
-          onclick="sendFleet(${origin},${dIdx},[${[..._smSelectedShips].join(',')}])">
+          onclick="sendFleet(${origin},${dIdx},[${[..._smSelectedShips].join(',')}],${cargoJSON})">
           ${dest.name}${hostile ? ' <span style="color:var(--blood)">⚠ HOSTILE FLEET</span>' : ''} — ETA ${etaStr}
         </button>`;
+        // Cargo manifest form: only when group has miner capacity and dest is friendly/colonized.
+        if (cargoCap > 0 && friendly && srcPools && _smSelectedShips.size > 0) {
+          let used = Object.values(_smCargoManifest).reduce((a,b) => a + b, 0);
+          html += `<div style="padding:8px;background:rgba(255,255,255,0.04);border:1px solid var(--edge);margin:-2px 0 8px;font-size:10px">
+            <div style="letter-spacing:1px;color:var(--muted);margin-bottom:4px">🚚 CARGO MANIFEST — ${used}/${cargoCap} CAPACITY USED</div>`;
+          CARGO_RES_LIST.forEach(res => {
+            const avail = Math.floor(srcPools.res[res] || 0);
+            if (avail <= 0 && !_smCargoManifest[res]) return;
+            const val = _smCargoManifest[res] || 0;
+            html += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+              <span style="flex:1;text-transform:capitalize">${res}</span>
+              <span style="color:var(--muted)">avail ${fmt(avail)}</span>
+              <input type="number" min="0" max="${Math.min(avail, cargoCap)}" value="${val}"
+                style="width:70px;background:rgba(0,0,0,0.3);border:1px solid var(--edge);color:#fff;font-family:monospace;font-size:10px;padding:2px 4px"
+                onchange="_smSetCargoAmount('${res}',this.value)">
+            </div>`;
+          });
+          html += `</div>`;
+        } else if (cargoCap > 0 && !friendly && _smSelectedShips.size > 0) {
+          html += `<div style="font-size:9px;color:var(--muted);margin:-2px 0 8px">Cargo can only be sent to colonized/friendly worlds.</div>`;
+        }
       });
     }
     html += '</div>';
@@ -2859,8 +2953,14 @@ function renderStarMap() {
       const total = m.arriveTime - m.departTime;
       const prog = total > 0 ? Math.min(1, Math.max(0, (now - m.departTime) / total)) : 1;
       const remMs = Math.max(0, m.arriveTime - now);
+      let cargoLine = '';
+      if (m.cargo) {
+        const summary = Object.keys(m.cargo).map(res => `${fmt(m.cargo[res])} ${res}`).join(', ');
+        cargoLine = `<div style="color:var(--gold)">🚚 ${summary} → ${state.solar[m.to].name}</div>`;
+      }
       html += `<div class="sm-mission-row">
         ${m.shipIds.length} ship(s): ${state.solar[m.from].name} → ${state.solar[m.to].name} — ${_smFormatDuration(remMs)} remaining
+        ${cargoLine}
         <div class="sm-progress"><div class="sm-progress-fill" style="width:${Math.floor(prog*100)}%"></div></div>
       </div>`;
     });

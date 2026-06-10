@@ -120,11 +120,28 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 </head><body>
 <div id="app">
 
+  <!-- screen-title -->
+  <div id="screen-title" class="screen active">
+    <div class="screen-body" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;text-align:center;gap:28px">
+      <div>
+        <div style="font-size:28px;font-weight:900;letter-spacing:6px;color:var(--rust)">☠ LEGION</div>
+        <div style="font-size:28px;font-weight:900;letter-spacing:6px;color:var(--text);margin-top:4px">GALAXY</div>
+        <div style="font-size:9px;letter-spacing:3px;color:var(--muted);margin-top:10px">// PLANETARY CONQUEST //</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;width:100%;max-width:280px">
+        <button id="title-continue-btn" class="action-btn" style="display:none" onclick="continueGame()">CONTINUE</button>
+        <div id="title-continue-sub" style="font-size:8px;color:var(--muted);letter-spacing:1px"></div>
+        <button class="action-btn mil" onclick="startNewGame()">NEW CAMPAIGN</button>
+      </div>
+    </div>
+  </div>
+
   <!-- screen-home -->
-  <div id="screen-home" class="screen active">
+  <div id="screen-home" class="screen">
     <div class="topbar">
       <span class="topbar-title">☠ LEGION GALAXY</span>
       <div style="display:flex;gap:6px">
+        <button class="back-btn" onclick="manualSaveGame()">💾 SAVE</button>
         <button class="back-btn" onclick="openTroops()">🪖 TROOPS</button>
         <button class="back-btn" onclick="showSolarSystem()">⚡ SYSTEM</button>
       </div>
@@ -2943,6 +2960,86 @@ startCounterAttackTimer();
 
 // PixiJS (non-blocking, fails gracefully if PIXI not loaded)
 if (typeof PIXI !== 'undefined') initPixi();
+
+// ─── SAVE / LOAD / TITLE SCREEN ──────────────────────────────────────────────
+
+function serializeState() {
+  return JSON.stringify(state, (k, v) => v instanceof Set ? {__set: Array.from(v)} : v);
+}
+
+function deserializeState(json) {
+  return JSON.parse(json, (k, v) => (v && typeof v === 'object' && Array.isArray(v.__set)) ? new Set(v.__set) : v);
+}
+
+function hasSave() { return !!localStorage.getItem('lg_save'); }
+
+function saveGame() {
+  try {
+    localStorage.setItem('lg_save', serializeState());
+    localStorage.setItem('lg_save_time', Date.now().toString());
+    return true;
+  } catch (e) { return false; }
+}
+
+function loadGame() {
+  const raw = localStorage.getItem('lg_save');
+  if (!raw) return false;
+  try {
+    const loaded = deserializeState(raw);
+    Object.keys(state).forEach(k => delete state[k]);
+    Object.assign(state, loaded);
+    return true;
+  } catch (e) { return false; }
+}
+
+function manualSaveGame() {
+  toast(saveGame() ? '// GAME SAVED //' : '// SAVE FAILED //');
+}
+
+function isInGame() {
+  const t = document.getElementById('screen-title');
+  return !t || !t.classList.contains('active');
+}
+
+function startNewGame() {
+  if (hasSave() && !confirm('Starting a new campaign will erase your saved progress. Continue?')) return;
+  localStorage.removeItem('lg_save');
+  localStorage.removeItem('lg_save_time');
+  showScreen('home');
+  renderHome();
+  toast('// NEW CAMPAIGN STARTED //');
+}
+
+function continueGame() {
+  if (loadGame()) {
+    showScreen('home');
+    applyResearchEffects();
+    renderHome();
+    toast('// GAME LOADED //');
+  } else {
+    toast('// NO SAVE FOUND //');
+  }
+}
+
+function renderTitleScreen() {
+  const btn = document.getElementById('title-continue-btn');
+  const sub = document.getElementById('title-continue-sub');
+  if (!btn) return;
+  if (hasSave()) {
+    btn.style.display = 'block';
+    const t = parseInt(localStorage.getItem('lg_save_time') || '0', 10);
+    if (sub) sub.textContent = t ? 'Last saved: ' + new Date(t).toLocaleString() : '';
+  } else {
+    btn.style.display = 'none';
+    if (sub) sub.textContent = '';
+  }
+}
+
+renderTitleScreen();
+
+// Autosave every 30s while in-game, and on tab close
+setInterval(() => { if (isInGame()) saveGame(); }, 30000);
+window.addEventListener('beforeunload', () => { if (isInGame()) saveGame(); });
 
 // ─── DEVELOPER MODE ──────────────────────────────────────────────────────────
 

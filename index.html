@@ -2944,6 +2944,109 @@ startCounterAttackTimer();
 // PixiJS (non-blocking, fails gracefully if PIXI not loaded)
 if (typeof PIXI !== 'undefined') initPixi();
 
+// ─── DEVELOPER MODE ──────────────────────────────────────────────────────────
+
+state._devMode = localStorage.getItem('lg_dev') === '1' ||
+  new URLSearchParams(location.search).get('dev') === '1';
+if (state._devMode) localStorage.setItem('lg_dev', '1');
+
+function toggleDevMode() {
+  state._devMode = !state._devMode;
+  localStorage.setItem('lg_dev', state._devMode ? '1' : '0');
+  renderDevButton();
+  if (state._devMode) toast('// DEV MODE ON //'); else { toast('// DEV MODE OFF //'); closeModal(); }
+}
+
+function renderDevButton() {
+  let btn = document.getElementById('dev-toggle-btn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'dev-toggle-btn';
+    btn.className = 'back-btn';
+    btn.style.cssText = 'position:fixed;bottom:6px;left:6px;z-index:9999;font-size:9px;opacity:0.5;padding:4px 8px';
+    btn.onclick = () => state._devMode ? openDevPanel() : null;
+    btn.ondblclick = (e) => { e.stopPropagation(); toggleDevMode(); };
+    document.body.appendChild(btn);
+  }
+  btn.textContent = state._devMode ? '🔧 DEV' : '🔧';
+  btn.title = state._devMode ? 'Tap: dev panel · Double-tap: turn off' : 'Double-tap: enable dev mode';
+  btn.style.background = state._devMode ? 'var(--gold)' : 'var(--plate2)';
+  btn.style.color = state._devMode ? '#000' : 'var(--muted)';
+}
+
+function devGiveResources() {
+  Object.keys(state.res).forEach(k => state.res[k] = (state.res[k] || 0) + 50000);
+  renderAllResBars();
+  toast('// +50,000 ALL RESOURCES //');
+}
+
+function devInstantBuilds() {
+  let n = 0;
+  state.planet.continents.forEach(c => c.bldgs.forEach(b => {
+    if (!b.built) { b.built = true; b.buildEnd = null; n++; }
+  }));
+  if (state.fleet && state.fleet.buildQueue) {
+    state.fleet.buildQueue.forEach(s => { s.buildEnd = Date.now(); n++; });
+  }
+  if (typeof refreshContMap === 'function') refreshContMap();
+  toast(`// ${n} BUILD(S)/SHIP(S) COMPLETED //`);
+}
+
+function devUnlockResearch() {
+  Object.values(RESEARCH_TREE).forEach(item => state.researchV2.add(item.id));
+  applyResearchEffects();
+  toast('// ALL RESEARCH UNLOCKED //');
+}
+
+function devConquerAll() {
+  state.planet.continents.forEach((c, i) => {
+    if (!c.conquered) {
+      c.conquered = true;
+      c.aliens = null;
+      if (!c.bldgs.some(b => b.type === 'colonyCenter')) {
+        c.bldgs.push({_uid: state._uid++, type:'colonyCenter', col:0, row:0, level:1, built:true, buildEnd:null});
+      }
+    }
+  });
+  renderHome();
+  toast('// ALL CONTINENTS CONQUERED //');
+}
+
+function devMaxTroops() {
+  Object.keys(state.troops).forEach(unit => {
+    Object.keys(state.troops[unit]).forEach(tier => { state.troops[unit][tier] = 9999; });
+  });
+  renderAllResBars();
+  toast('// TROOPS MAXED //');
+}
+
+function devResetGame() {
+  if (!confirm('Reset all game progress? This cannot be undone.')) return;
+  localStorage.removeItem('lg_save');
+  localStorage.removeItem('lg_dev');
+  location.reload();
+}
+
+function openDevPanel() {
+  const html = `
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div style="font-size:9px;color:var(--muted);letter-spacing:1px;margin-bottom:4px">
+        // CHEATS — FOR TESTING ONLY //
+      </div>
+      <button class="back-btn" onclick="devGiveResources()">+50,000 ALL RESOURCES</button>
+      <button class="back-btn" onclick="devInstantBuilds()">INSTANT-COMPLETE BUILDS &amp; SHIPS</button>
+      <button class="back-btn" onclick="devUnlockResearch()">UNLOCK ALL RESEARCH</button>
+      <button class="back-btn" onclick="devConquerAll()">CONQUER ALL CONTINENTS</button>
+      <button class="back-btn" onclick="devMaxTroops()">MAX ALL TROOPS</button>
+      <div style="border-top:1px solid var(--edge);margin:6px 0"></div>
+      <button class="back-btn" style="color:var(--blood)" onclick="devResetGame()">RESET GAME PROGRESS</button>
+      <button class="back-btn" onclick="toggleDevMode()">TURN OFF DEV MODE</button>
+    </div>`;
+  openModal('// DEVELOPER MODE //', html);
+}
+
+renderDevButton();
+
 
 </script>
 </body>

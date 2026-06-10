@@ -2589,14 +2589,20 @@ function _starmapTick() {
   const now = Date.now();
   const arrived = state.fleet.missions.filter(m => now >= m.arriveTime);
   if (arrived.length === 0) return;
+  state.fleet.missions = state.fleet.missions.filter(m => now < m.arriveTime);
   arrived.forEach(m => {
+    const garrison = getFleetGarrison(m.to);
+    if (garrison) {
+      toast(`// HOSTILE FLEET DETECTED AT ${state.solar[m.to].name.toUpperCase()} //`);
+      engageFleetBattle(m.shipIds, m.to, m.from);
+      return;
+    }
     m.shipIds.forEach(id => {
       const s = state.fleet.ships.find(sh => sh.id === id);
       if (s) { s.loc = m.to; s.status = 'idle'; }
     });
     toast(`// FLEET ARRIVED AT ${state.solar[m.to].name.toUpperCase()} //`);
   });
-  state.fleet.missions = state.fleet.missions.filter(m => now < m.arriveTime);
   if (document.getElementById('screen-starmap')?.classList.contains('active')) renderStarMap();
 }
 
@@ -2645,9 +2651,10 @@ function renderStarMap() {
     const [r,g,b] = sol.col;
     const idleCount = state.fleet.ships.filter(s => s.loc === idx && s.status === 'idle').length;
     const sel = _smSelectedOrigin === idx ? ' sel' : '';
+    const hostile = !!getFleetGarrison(idx);
     nodesHTML += `<div class="sm-node${sel}" style="left:${px}px;top:${py}px" onclick="_smSelectNode(${idx})">
       <div class="sm-node-dot" style="width:${size}px;height:${size}px;background:radial-gradient(circle at 35% 35%, rgb(${Math.min(255,r+60)},${Math.min(255,g+60)},${Math.min(255,b+60)}), rgb(${r},${g},${b}))"></div>
-      <div class="sm-node-label">${sol.name}${sol.isHome ? ' ★' : ''}</div>
+      <div class="sm-node-label">${sol.name}${sol.isHome ? ' ★' : ''}${hostile ? ' 👾' : ''}</div>
       ${idleCount > 0 ? `<div class="sm-node-fleet">⛵ ${idleCount}</div>` : ''}
     </div>`;
   });
@@ -2695,9 +2702,10 @@ function renderStarMap() {
         const etaMs = Math.round((dist / spd) * TRAVEL_SCALE_MS);
         const etaStr = _smFormatDuration(etaMs);
         const disabled = _smSelectedShips.size === 0 ? 'disabled' : '';
+        const hostile = !!getFleetGarrison(dIdx);
         html += `<button class="back-btn" style="width:100%;margin-bottom:6px;text-align:left" ${disabled}
           onclick="sendFleet(${origin},${dIdx},[${[..._smSelectedShips].join(',')}])">
-          ${dest.name} — ETA ${etaStr}
+          ${dest.name}${hostile ? ' <span style="color:var(--blood)">⚠ HOSTILE FLEET</span>' : ''} — ETA ${etaStr}
         </button>`;
       });
     }
@@ -2722,6 +2730,121 @@ function renderStarMap() {
   }
 
   body.innerHTML = html;
+}
+
+// ─── FLEET VS FLEET COMBAT ───────────────────────────────────────────────────
+
+function _genFleetGarrison(idx) {
+  const sol = state.solar[idx];
+  const rng = mkRng(strSeed('garrison' + sol.name));
+  return {
+    fighter: Math.floor(3 + idx * 2 + rng() * 4),
+    cruiser: Math.floor(1 + Math.floor(idx / 2) + rng() * 2),
+  };
+}
+
+// Returns the enemy fleet garrison for a solar system, or null if none/cleared
+function getFleetGarrison(idx) {
+  const sol = state.solar[idx];
+  if (!sol || sol.isHome || sol.colonized || sol.fleetGarrisonCleared) return null;
+  if (sol.fleetGarrison === undefined) sol.fleetGarrison = _genFleetGarrison(idx);
+  return sol.fleetGarrison;
+}
+
+function _enemyFleetUnits(garrison) {
+  const units = [];
+  Object.entries(garrison).forEach(([cls, count]) => {
+    const def = SHIP_DEFS[cls];
+    if (!def) return;
+    for (let i = 0; i < count; i++) units.push({class: cls, name: def.name, hp: def.hp, maxHp: def.hp, atk: def.atk});
+  });
+  return units;
+}
+
+// Auto-resolve a fleet battle. shipIds = player ships present at the system.
+function engageFleetBattle(shipIds, solarIdx, fromIdx) {
+  const garrison = getFleetGarrison(solarIdx);
+  const sol = state.solar[solarIdx];
+  if (!garrison) return;
+
+  const playerShips = shipIds.map(id => state.fleet.ships.find(s => s.id === id)).filter(Boolean);
+  const enemyShips = _enemyFleetUnits(garrison);
+  const startPlayerCount = playerShips.length;
+  const startEnemyCount = enemyShips.length;
+
+  let round = 0;
+  while (playerShips.some(s => s.hp > 0) && enemyShips.some(s => s.hp > 0) && round < 100) {
+    round++;
+    const enemyTotalAtk = enemyShips.filter(s => s.hp > 0).reduce((sum, s) => sum + s.atk, 0);
+    const playerTotalAtk = playerShips.filter(s => s.hp > 0).reduce((sum, s) => sum + s.atk, 0);
+    // enemy fire focuses player ships in order
+    let dmg = enemyTotalAtk;
+    for (const s of playerShips) {
+      if (dmg <= 0) break;
+      if (s.hp <= 0) continue;
+      const hit = Math.min(s.hp, dmg);
+      s.hp -= hit;
+      dmg -= hit;
+    }
+    // player fire focuses enemy ships in order
+    dmg = playerTotalAtk;
+    for (const s of enemyShips) {
+      if (dmg <= 0) break;
+      if (s.hp <= 0) continue;
+      const hit = Math.min(s.hp, dmg);
+      s.hp -= hit;
+      dmg -= hit;
+    }
+  }
+
+  const survivors = playerShips.filter(s => s.hp > 0);
+  const lost = playerShips.filter(s => s.hp <= 0);
+  const enemySurvived = enemyShips.filter(s => s.hp > 0).length;
+  const won = enemySurvived === 0 && survivors.length > 0;
+
+  // remove destroyed player ships from the roster
+  state.fleet.ships = state.fleet.ships.filter(s => !lost.some(l => l.id === s.id));
+
+  if (won) {
+    sol.fleetGarrison = null;
+    sol.fleetGarrisonCleared = true;
+    survivors.forEach(s => { s.loc = solarIdx; s.status = 'idle'; });
+  } else {
+    // retreat survivors back to where they came from
+    const retreatTo = fromIdx ?? solarIdx;
+    survivors.forEach(s => { s.loc = retreatTo; s.status = 'idle'; });
+    // weaken garrison by losses dealt
+    const enemyLost = startEnemyCount - enemySurvived;
+    if (enemyLost > 0) {
+      let remaining = enemyLost;
+      ['fighter','cruiser'].forEach(cls => {
+        const take = Math.min(remaining, garrison[cls] || 0);
+        garrison[cls] = (garrison[cls] || 0) - take;
+        remaining -= take;
+      });
+    }
+    if ((garrison.fighter || 0) <= 0 && (garrison.cruiser || 0) <= 0) {
+      sol.fleetGarrison = null;
+      sol.fleetGarrisonCleared = true;
+    }
+  }
+
+  const html = `
+    <div class="sm-section">
+      <div class="sec-hdr" style="color:${won ? 'var(--mil)' : 'var(--blood)'}">${won ? '⚔ VICTORY' : '⚔ FORCES REPELLED'}</div>
+      <div style="font-size:11px;line-height:1.8">
+        System: <b>${sol.name}</b><br>
+        Enemy fleet: ${startEnemyCount} ship(s), ${enemySurvived} remaining<br>
+        Your fleet: ${startPlayerCount} ship(s), ${survivors.length} survived, ${lost.length} lost<br>
+        ${won ? 'The system is now clear of hostile forces — colonization is available.'
+              : (survivors.length > 0
+                  ? 'Surviving ships have retreated to ' + state.solar[fromIdx ?? solarIdx].name + '.'
+                  : 'The fleet was completely destroyed.')}
+      </div>
+      <button class="action-btn" style="margin-top:10px" onclick="closeModal();renderStarMap()">CONTINUE</button>
+    </div>`;
+  openModal(won ? '// SYSTEM CAPTURED //' : '// BATTLE REPORT //', html);
+  renderAllResBars();
 }
 
 function _smFormatDuration(ms) {
@@ -2921,6 +3044,7 @@ function colonizePlanet(idx) {
   const sol = state.solar[idx];
   if (!sol || sol.colonized) return;
   if (sol.inhospitable) { toast('// TERRAFORM FIRST //'); return; }
+  if (getFleetGarrison(idx)) { toast('// CLEAR ENEMY FLEET FIRST //'); return; }
   const cost = 1000 + idx * 500;
   if ((state.res.metal || 0) < cost) { toast('// INSUFFICIENT METAL //'); return; }
   state.res.metal -= cost;

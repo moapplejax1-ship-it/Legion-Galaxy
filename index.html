@@ -74,6 +74,20 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 #modal-box::before{content:'';display:block;width:36px;height:3px;background:var(--rust);margin:0 auto 12px;opacity:.8}
 #modal-box.wide{max-width:640px}
 
+/* Star map */
+.sm-node{position:absolute;display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-50%);cursor:pointer;text-align:center}
+.sm-node-dot{border-radius:50%;border:2px solid rgba(255,255,255,0.4)}
+.sm-node.sel .sm-node-dot{border-color:var(--gold);box-shadow:0 0 12px var(--gold)}
+.sm-node-label{font-size:9px;font-weight:900;letter-spacing:1px;color:var(--text);margin-top:4px;background:rgba(0,0,0,0.5);padding:1px 4px;white-space:nowrap}
+.sm-node-fleet{font-size:9px;color:var(--mil);margin-top:1px}
+.sm-section{padding:10px;background:var(--plate2);border:1px solid var(--edge);margin-bottom:8px}
+.sm-ship-row{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:11px;border-bottom:1px solid var(--edge)}
+.sm-ship-row:last-child{border-bottom:none}
+.sm-mission-row{font-size:10px;color:var(--muted);padding:6px 0;border-bottom:1px solid var(--edge);line-height:1.6}
+.sm-mission-row:last-child{border-bottom:none}
+.sm-progress{height:4px;background:var(--plate);margin-top:4px;overflow:hidden}
+.sm-progress-fill{height:100%;background:var(--gold)}
+
 /* Research tree */
 .rtabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;position:sticky;top:0;background:var(--plate);padding-bottom:8px;z-index:1}
 .rtab{background:var(--plate2);color:var(--muted);border:1px solid var(--edge);padding:8px 10px;font-size:11px;font-weight:900;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase;border-radius:2px}
@@ -230,10 +244,24 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     <div class="topbar">
       <button class="back-btn" onclick="goHome()">← BACK</button>
       <span class="topbar-title">⚡ SOLAR SYSTEM</span>
-      <div style="width:60px"></div>
+      <button class="back-btn" onclick="showStarMap()">🌌 MAP</button>
     </div>
     <div class="resource-bar" id="res-solar"></div>
     <div class="screen-body" id="solar-body"></div>
+  </div>
+
+  <!-- screen-starmap -->
+  <div id="screen-starmap" class="screen">
+    <div class="topbar">
+      <button class="back-btn" onclick="closeStarMap();showSolarSystem()">← BACK</button>
+      <span class="topbar-title">🌌 STAR MAP</span>
+      <div style="width:60px"></div>
+    </div>
+    <div class="resource-bar" id="res-starmap"></div>
+    <div class="screen-body" style="padding:0 0 80px">
+      <div id="starmap-canvas-wrap" style="position:relative;width:100%"></div>
+      <div id="starmap-body" style="padding:10px 12px"></div>
+    </div>
   </div>
 
   <!-- Modal overlay -->
@@ -358,6 +386,18 @@ const RESEARCH_TREE = {
   deepCoreMining:    {id:'deepCoreMining',     branch:'planetary', name:'Deep Core Mining',    cost:380, prereqs:['xenogeology'], effects:{extraCollectorSlot:true}},
   planetaryDefenseMk2:{id:'planetaryDefenseMk2',branch:'planetary',name:'Planetary Defense Mk2',cost:300,prereqs:['atmosphericAnalysis'],effects:{defenseGridBonus:0.50}},
 };
+
+// Logical (0-100) star map positions for the 5 solar bodies
+const STAR_POSITIONS = [
+  {x:50, y:50}, // New Terra (home)
+  {x:78, y:32},
+  {x:24, y:30},
+  {x:76, y:76},
+  {x:22, y:74},
+];
+
+// ms of travel time per logical-distance-unit at speed 1
+const TRAVEL_SCALE_MS = 9000;
 
 const SHIP_DEFS = {
   miner:      {name:'Miner',       hp:200, atk:10,  spd:1, capacity:0, maxFleet:null,
@@ -2303,6 +2343,14 @@ function initFleet() {
   if (!state.fleet) state.fleet = {ships:[], buildQueue:[]};
   if (!state.fleet.ships)      state.fleet.ships = [];
   if (!state.fleet.buildQueue) state.fleet.buildQueue = [];
+  if (!state.fleet.missions)   state.fleet.missions = [];
+  // migrate ships saved before star map existed
+  state.fleet.ships.forEach(s => {
+    if (s.loc === undefined) s.loc = 0;
+    if (s.status === 'enroute' && !state.fleet.missions.some(m => m.shipIds.includes(s.id))) {
+      s.status = 'idle';
+    }
+  });
 }
 
 function _shipFinalStats(shipClass, variantId) {
@@ -2389,6 +2437,7 @@ function _shipBuildTick() {
       atk: stats.atk, spd: stats.spd,
       upkeep: {...(base.upkeep || {})},
       status: 'idle', assignedContinent: null,
+      loc: 0,
     };
     state.fleet.ships.push(ship);
     toast('// SHIP COMMISSIONED: ' + ship.name + ' //');
@@ -2491,6 +2540,197 @@ function getFleetScreenHTML() {
   html += `<div class="fleet-section"><b>Upkeep:</b> ${upkeepStr || 'none'}</div>`;
   html += '</div>';
   return html;
+}
+
+// ─── STAR MAP & FLEET NAVIGATION ─────────────────────────────────────────────
+
+let _starmapInterval = null;
+let _smSelectedOrigin = null;
+let _smSelectedShips = new Set();
+
+function _starDist(a, b) {
+  const pa = STAR_POSITIONS[a], pb = STAR_POSITIONS[b];
+  return Math.hypot(pa.x - pb.x, pa.y - pb.y);
+}
+
+function _fleetGroupSpeed(shipIds) {
+  let min = Infinity;
+  shipIds.forEach(id => {
+    const s = state.fleet.ships.find(sh => sh.id === id);
+    if (s && s.spd > 0 && s.spd < min) min = s.spd;
+  });
+  return min === Infinity ? 1 : min;
+}
+
+function sendFleet(fromIdx, toIdx, shipIds) {
+  if (fromIdx === toIdx) { toast('// SELECT A DIFFERENT DESTINATION //'); return; }
+  if (!shipIds || shipIds.length === 0) { toast('// SELECT AT LEAST ONE SHIP //'); return; }
+  const ships = shipIds.map(id => state.fleet.ships.find(s => s.id === id)).filter(Boolean);
+  if (ships.some(s => s.loc !== fromIdx || s.status !== 'idle')) {
+    toast('// FLEET NOT AVAILABLE //'); return;
+  }
+  const dist = _starDist(fromIdx, toIdx);
+  const spd = _fleetGroupSpeed(shipIds);
+  const travelMs = Math.round((dist / spd) * TRAVEL_SCALE_MS);
+  const now = Date.now();
+  const mission = {
+    id: state._uid++, shipIds: shipIds.slice(), from: fromIdx, to: toIdx,
+    departTime: now, arriveTime: now + travelMs,
+  };
+  state.fleet.missions.push(mission);
+  ships.forEach(s => { s.status = 'enroute'; });
+  toast(`// FLEET DEPARTED FOR ${state.solar[toIdx].name.toUpperCase()} //`);
+  _smSelectedShips.clear();
+  renderStarMap();
+}
+
+function _starmapTick() {
+  if (!state.fleet.missions || state.fleet.missions.length === 0) return;
+  const now = Date.now();
+  const arrived = state.fleet.missions.filter(m => now >= m.arriveTime);
+  if (arrived.length === 0) return;
+  arrived.forEach(m => {
+    m.shipIds.forEach(id => {
+      const s = state.fleet.ships.find(sh => sh.id === id);
+      if (s) { s.loc = m.to; s.status = 'idle'; }
+    });
+    toast(`// FLEET ARRIVED AT ${state.solar[m.to].name.toUpperCase()} //`);
+  });
+  state.fleet.missions = state.fleet.missions.filter(m => now < m.arriveTime);
+  if (document.getElementById('screen-starmap')?.classList.contains('active')) renderStarMap();
+}
+
+function showStarMap() {
+  initFleet();
+  _smSelectedOrigin = null;
+  _smSelectedShips.clear();
+  renderAllResBars();
+  showScreen('starmap');
+  renderStarMap();
+  if (_starmapInterval) clearInterval(_starmapInterval);
+  _starmapInterval = setInterval(() => { _starmapTick(); renderStarMap(); }, 1000);
+}
+
+function closeStarMap() {
+  if (_starmapInterval) { clearInterval(_starmapInterval); _starmapInterval = null; }
+}
+
+function _smSelectNode(idx) {
+  _smSelectedOrigin = (_smSelectedOrigin === idx) ? null : idx;
+  _smSelectedShips.clear();
+  renderStarMap();
+}
+
+function _smToggleShip(id) {
+  if (_smSelectedShips.has(id)) _smSelectedShips.delete(id); else _smSelectedShips.add(id);
+  renderStarMap();
+}
+
+function renderStarMap() {
+  const wrap = document.getElementById('starmap-canvas-wrap');
+  const body = document.getElementById('starmap-body');
+  if (!wrap || !body) return;
+
+  const W = Math.max(wrap.parentElement.offsetWidth || window.innerWidth || 375, 280);
+  const H = Math.floor(W * 0.85);
+  wrap.style.height = H + 'px';
+  wrap.style.background = 'radial-gradient(ellipse at 50% 45%, #0a1428 0%, #04080f 65%, #010204 100%)';
+
+  const now = Date.now();
+  let nodesHTML = '';
+  state.solar.forEach((sol, idx) => {
+    const px = (STAR_POSITIONS[idx].x / 100) * W;
+    const py = (STAR_POSITIONS[idx].y / 100) * H;
+    const size = sol.isHome ? 28 : 20;
+    const [r,g,b] = sol.col;
+    const idleCount = state.fleet.ships.filter(s => s.loc === idx && s.status === 'idle').length;
+    const sel = _smSelectedOrigin === idx ? ' sel' : '';
+    nodesHTML += `<div class="sm-node${sel}" style="left:${px}px;top:${py}px" onclick="_smSelectNode(${idx})">
+      <div class="sm-node-dot" style="width:${size}px;height:${size}px;background:radial-gradient(circle at 35% 35%, rgb(${Math.min(255,r+60)},${Math.min(255,g+60)},${Math.min(255,b+60)}), rgb(${r},${g},${b}))"></div>
+      <div class="sm-node-label">${sol.name}${sol.isHome ? ' ★' : ''}</div>
+      ${idleCount > 0 ? `<div class="sm-node-fleet">⛵ ${idleCount}</div>` : ''}
+    </div>`;
+  });
+
+  // in-transit fleet markers, interpolated along the route
+  state.fleet.missions.forEach(m => {
+    const total = m.arriveTime - m.departTime;
+    const prog = total > 0 ? Math.min(1, Math.max(0, (now - m.departTime) / total)) : 1;
+    const a = STAR_POSITIONS[m.from], b = STAR_POSITIONS[m.to];
+    const px = ((a.x + (b.x - a.x) * prog) / 100) * W;
+    const py = ((a.y + (b.y - a.y) * prog) / 100) * H;
+    nodesHTML += `<div class="sm-node" style="left:${px}px;top:${py}px;pointer-events:none">
+      <div class="sm-node-dot" style="width:10px;height:10px;background:var(--gold);border-color:#fff"></div>
+    </div>`;
+  });
+
+  wrap.innerHTML = nodesHTML;
+
+  // body: dispatch panel + active missions
+  let html = '';
+  if (_smSelectedOrigin !== null) {
+    const origin = _smSelectedOrigin;
+    const sol = state.solar[origin];
+    const dockedShips = state.fleet.ships.filter(s => s.loc === origin && s.status === 'idle');
+    html += `<div class="sm-section">
+      <div class="sec-hdr">⛵ FLEET AT ${sol.name.toUpperCase()}</div>`;
+    if (dockedShips.length === 0) {
+      html += `<div style="font-size:10px;color:var(--muted)">No idle ships docked here.</div>`;
+    } else {
+      dockedShips.forEach(s => {
+        const checked = _smSelectedShips.has(s.id) ? 'checked' : '';
+        html += `<label class="sm-ship-row">
+          <input type="checkbox" ${checked} onchange="_smToggleShip(${s.id})">
+          <span style="flex:1">${s.name} <span style="color:var(--muted)">(${s.class})</span></span>
+          <span style="color:var(--muted)">SPD ${s.spd.toFixed(1)}</span>
+        </label>`;
+      });
+    }
+    if (dockedShips.length > 0) {
+      html += `<div class="sec-hdr" style="margin-top:10px">DESTINATION</div>`;
+      state.solar.forEach((dest, dIdx) => {
+        if (dIdx === origin) return;
+        const dist = _starDist(origin, dIdx);
+        const spd = _fleetGroupSpeed([..._smSelectedShips]);
+        const etaMs = Math.round((dist / spd) * TRAVEL_SCALE_MS);
+        const etaStr = _smFormatDuration(etaMs);
+        const disabled = _smSelectedShips.size === 0 ? 'disabled' : '';
+        html += `<button class="back-btn" style="width:100%;margin-bottom:6px;text-align:left" ${disabled}
+          onclick="sendFleet(${origin},${dIdx},[${[..._smSelectedShips].join(',')}])">
+          ${dest.name} — ETA ${etaStr}
+        </button>`;
+      });
+    }
+    html += '</div>';
+  } else {
+    html += `<div class="sm-section"><div style="font-size:10px;color:var(--muted)">Tap a system on the map to view docked fleets and send ships.</div></div>`;
+  }
+
+  // active missions
+  if (state.fleet.missions.length > 0) {
+    html += `<div class="sm-section"><div class="sec-hdr">🚀 IN TRANSIT</div>`;
+    state.fleet.missions.forEach(m => {
+      const total = m.arriveTime - m.departTime;
+      const prog = total > 0 ? Math.min(1, Math.max(0, (now - m.departTime) / total)) : 1;
+      const remMs = Math.max(0, m.arriveTime - now);
+      html += `<div class="sm-mission-row">
+        ${m.shipIds.length} ship(s): ${state.solar[m.from].name} → ${state.solar[m.to].name} — ${_smFormatDuration(remMs)} remaining
+        <div class="sm-progress"><div class="sm-progress-fill" style="width:${Math.floor(prog*100)}%"></div></div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  body.innerHTML = html;
+}
+
+function _smFormatDuration(ms) {
+  const s = Math.ceil(ms / 1000);
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
 }
 
 // ─── SECTION 10: TERRAFORMING, DEFENSE GRID, SOLAR SYSTEM ────────────────────
@@ -2981,6 +3221,7 @@ setInterval(() => {
   productionTick();
   applyUpkeep();
   _terraformingTick();
+  _starmapTick();
   // refresh continent map if visible
   const activeScreen = document.querySelector('.screen.active');
   if (activeScreen && activeScreen.id === 'screen-continent') refreshContMap();

@@ -239,6 +239,19 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     </div>
   </div>
 
+  <!-- screen-fleetbattle -->
+  <div id="screen-fleetbattle" class="screen">
+    <div class="topbar">
+      <button class="back-btn" id="fb-back">← BACK</button>
+      <span class="topbar-title" id="fb-title">FLEET BATTLE</span>
+      <div style="width:60px"></div>
+    </div>
+    <div class="screen-body" style="padding:0 0 80px">
+      <canvas id="fleetbattle-map"></canvas>
+      <div style="padding:10px 12px" id="fb-body"></div>
+    </div>
+  </div>
+
   <!-- screen-solar -->
   <div id="screen-solar" class="screen">
     <div class="topbar">
@@ -535,6 +548,12 @@ const state = {
 // Returns the continents array currently being managed/invaded:
 // state.planet.continents for the homeworld, or sol.continents for
 // an off-world invasion target (state._invasionTarget = solar idx).
+// Starting resource pool for a newly-colonized off-world colony — small
+// seed values so colonies start modest relative to the homeworld.
+function _seedColonyRes() {
+  return {metal:200, food:200, pop:20, research:0, excellorant:0, energy:0, credits:0, commodityCrates:0};
+}
+
 function getActiveContinents() {
   if (state._invasionTarget !== null && state._invasionTarget !== undefined) {
     const sol = state.solar[state._invasionTarget];
@@ -653,9 +672,13 @@ function renderAllResBars() {
   });
 }
 
-function getEnergyBalance() {
+// continents: optional continents array (defaults to home planet's).
+// isHome: when true, also factors in troop upkeep (home garrison only).
+function getEnergyBalance(continents, isHome) {
+  continents = continents || state.planet.continents;
+  isHome = isHome === undefined ? true : isHome;
   let produced = 0, consumed = 0;
-  state.planet.continents.forEach(c => {
+  continents.forEach(c => {
     if (!c.conquered) return;
     c.bldgs.forEach(b => {
       if (!b.built) return;
@@ -671,19 +694,24 @@ function getEnergyBalance() {
   });
   const effMult = 1 + getResearchBonus('energyConsumption');
   consumed = Math.max(0, consumed * effMult);
-  ['infantry','tanks','cavalry'].forEach(ut => {
-    consumed += (state.troops[ut].t2 || 0) * 0.5;
-    consumed += (state.troops[ut].t3 || 0) * 1.0;
-  });
+  if (isHome) {
+    ['infantry','tanks','cavalry'].forEach(ut => {
+      consumed += (state.troops[ut].t2 || 0) * 0.5;
+      consumed += (state.troops[ut].t3 || 0) * 1.0;
+    });
+  }
   const ratio = Math.min(1, produced / Math.max(1, consumed));
   const deficit = Math.max(0, consumed - produced);
   return {produced, consumed, deficit, ratio};
 }
 
-function applyEnergy() {
-  const {ratio} = getEnergyBalance();
+// continents: optional continents array (defaults to home planet's).
+// isHome: passed through to getEnergyBalance for troop upkeep.
+function applyEnergy(continents, isHome) {
+  continents = continents || state.planet.continents;
+  const {ratio} = getEnergyBalance(continents, isHome);
   const rng = mkRng(Date.now() & 0xffff);
-  state.planet.continents.forEach(c => {
+  continents.forEach(c => {
     if (!c.conquered) return;
     c.bldgs.forEach(b => {
       state._energyOnline[b._uid] = (ratio >= 1) ? true : rng() < ratio;
@@ -691,10 +719,11 @@ function applyEnergy() {
   });
 }
 
-function getStorageCapacity() {
+// continents: optional continents array (defaults to home planet's).
+function getStorageCapacity(continents) {
   const caps = {metal:5000, food:3000, pop:2000, research:1000, excellorant:200};
   const sciBonus = 1 + getResearchBonus('storageCap');
-  state.planet.continents.forEach(c => {
+  (continents || state.planet.continents).forEach(c => {
     if (!c.conquered) return;
     c.bldgs.forEach(b => {
       if (b.type === 'storehouse' && b.built) {
@@ -713,13 +742,16 @@ function getStorageCapacity() {
   return caps;
 }
 
-function enforceStorageCaps() {
-  const caps = getStorageCapacity();
-  state.res.metal      = Math.min(state.res.metal,      caps.metal);
-  state.res.food       = Math.min(state.res.food,       caps.food);
-  state.res.pop        = Math.min(state.res.pop,        caps.pop);
-  state.res.research   = Math.min(state.res.research,   caps.research);
-  state.res.excellorant = Math.min(state.res.excellorant, caps.excellorant);
+// continents/resPool: optional pair (defaults to home planet's).
+function enforceStorageCaps(continents, resPool) {
+  continents = continents || state.planet.continents;
+  resPool = resPool || state.res;
+  const caps = getStorageCapacity(continents);
+  resPool.metal      = Math.min(resPool.metal,      caps.metal);
+  resPool.food       = Math.min(resPool.food,       caps.food);
+  resPool.pop        = Math.min(resPool.pop,        caps.pop);
+  resPool.research   = Math.min(resPool.research,   caps.research);
+  resPool.excellorant = Math.min(resPool.excellorant, caps.excellorant);
 }
 
 function _getOverdriveMult(bldgUid) {
@@ -732,11 +764,12 @@ function productionTick() {
   renderAllResBars();
 }
 
-function _productionTickCore() {
-  _supplyTick();
-  applyEnergy();
+// Run a production tick for one world's continents/resource pool.
+// isHome: true for the home planet (factors troop upkeep into energy calc).
+function _productionTickForWorld(continents, resPool, isHome) {
+  applyEnergy(continents, isHome);
   const allProdBonus = 1 + getResearchBonus('allProduction');
-  state.planet.continents.forEach(c => {
+  continents.forEach(c => {
     if (!c.conquered) return;
     c.bldgs.forEach(b => {
       if (!b.built) return;
@@ -763,19 +796,30 @@ function _productionTickCore() {
       }
       if (def.prod.res !== 'energy') base *= allProdBonus;
       base *= odMult;
-      state.res[def.prod.res] = (state.res[def.prod.res] || 0) + base;
+      resPool[def.prod.res] = (resPool[def.prod.res] || 0) + base;
     });
   });
   // population growth
-  if (state.res.food > state.res.pop * 2) {
+  if (resPool.food > resPool.pop * 2) {
     let housingSum = 0;
-    state.planet.continents.forEach(c => {
+    continents.forEach(c => {
       if (!c.conquered) return;
       c.bldgs.forEach(b => { if (b.type === 'housingBlock' && b.built) housingSum += b.level; });
     });
-    state.res.pop += housingSum;
+    resPool.pop += housingSum;
   }
-  enforceStorageCaps();
+  enforceStorageCaps(continents, resPool);
+}
+
+function _productionTickCore() {
+  _supplyTick();
+  _productionTickForWorld(state.planet.continents, state.res, true);
+  // Off-world colonies: each colonized sol with its own continents/res
+  // gets its own independent production tick.
+  state.solar.forEach(sol => {
+    if (sol.isHome || !sol.colonized || !sol.continents || !sol.res) return;
+    _productionTickForWorld(sol.continents, sol.res, false);
+  });
   renderAllResBars();
 }
 
@@ -2286,6 +2330,7 @@ function finalizeVictory(contIdx) {
     if (sol && continents.every(c => c.conquered)) {
       sol.colonized = true;
       sol._invading = false;
+      if (!sol.res) sol.res = _seedColonyRes();
       const targetIdx = state._invasionTarget;
       state._invasionTarget = null;
       toast('// WORLD SECURED: ' + sol.name + ' COLONIZED //');
@@ -2687,7 +2732,7 @@ function _starmapTick() {
     const garrison = getFleetGarrison(m.to);
     if (garrison) {
       toast(`// HOSTILE FLEET DETECTED AT ${state.solar[m.to].name.toUpperCase()} //`);
-      engageFleetBattle(m.shipIds, m.to, m.from);
+      openFleetBattle(m.shipIds, m.to, m.from);
       return;
     }
     m.shipIds.forEach(id => {
@@ -2854,48 +2899,42 @@ function _enemyFleetUnits(garrison) {
   return units;
 }
 
-// Auto-resolve a fleet battle. shipIds = player ships present at the system.
-function engageFleetBattle(shipIds, solarIdx, fromIdx) {
-  const garrison = getFleetGarrison(solarIdx);
-  const sol = state.solar[solarIdx];
-  if (!garrison) return;
-
-  const playerShips = shipIds.map(id => state.fleet.ships.find(s => s.id === id)).filter(Boolean);
-  const enemyShips = _enemyFleetUnits(garrison);
-  const startPlayerCount = playerShips.length;
-  const startEnemyCount = enemyShips.length;
-
-  let round = 0;
-  while (playerShips.some(s => s.hp > 0) && enemyShips.some(s => s.hp > 0) && round < 100) {
-    round++;
-    const enemyTotalAtk = enemyShips.filter(s => s.hp > 0).reduce((sum, s) => sum + s.atk, 0);
-    const playerTotalAtk = playerShips.filter(s => s.hp > 0).reduce((sum, s) => sum + s.atk, 0);
-    // enemy fire focuses player ships in order
-    let dmg = enemyTotalAtk;
-    for (const s of playerShips) {
-      if (dmg <= 0) break;
-      if (s.hp <= 0) continue;
-      const hit = Math.min(s.hp, dmg);
-      s.hp -= hit;
-      dmg -= hit;
-    }
-    // player fire focuses enemy ships in order
-    dmg = playerTotalAtk;
-    for (const s of enemyShips) {
-      if (dmg <= 0) break;
-      if (s.hp <= 0) continue;
-      const hit = Math.min(s.hp, dmg);
-      s.hp -= hit;
-      dmg -= hit;
-    }
+// Resolve one combat round in place: enemy fire focuses player ships in
+// order, then player fire focuses enemy ships in order. Returns true if
+// the battle is over (one side fully destroyed).
+function _resolveFleetRound(playerShips, enemyShips) {
+  const enemyTotalAtk = enemyShips.filter(s => s.hp > 0).reduce((sum, s) => sum + s.atk, 0);
+  const playerTotalAtk = playerShips.filter(s => s.hp > 0).reduce((sum, s) => sum + s.atk, 0);
+  let dmg = enemyTotalAtk;
+  for (const s of playerShips) {
+    if (dmg <= 0) break;
+    if (s.hp <= 0) continue;
+    const hit = Math.min(s.hp, dmg);
+    s.hp -= hit;
+    s.lastHit = Date.now();
+    dmg -= hit;
   }
+  dmg = playerTotalAtk;
+  for (const s of enemyShips) {
+    if (dmg <= 0) break;
+    if (s.hp <= 0) continue;
+    const hit = Math.min(s.hp, dmg);
+    s.hp -= hit;
+    s.lastHit = Date.now();
+    dmg -= hit;
+  }
+  return !playerShips.some(s => s.hp > 0) || !enemyShips.some(s => s.hp > 0);
+}
 
+// Apply the same outcome logic as the old instant resolver: clear/weaken
+// garrison, remove destroyed player ships, retreat/station survivors.
+function _finishFleetBattle(playerShips, enemyShips, solarIdx, fromIdx, garrison, startPlayerCount, startEnemyCount) {
+  const sol = state.solar[solarIdx];
   const survivors = playerShips.filter(s => s.hp > 0);
   const lost = playerShips.filter(s => s.hp <= 0);
   const enemySurvived = enemyShips.filter(s => s.hp > 0).length;
   const won = enemySurvived === 0 && survivors.length > 0;
 
-  // remove destroyed player ships from the roster
   state.fleet.ships = state.fleet.ships.filter(s => !lost.some(l => l.id === s.id));
 
   if (won) {
@@ -2903,10 +2942,8 @@ function engageFleetBattle(shipIds, solarIdx, fromIdx) {
     sol.fleetGarrisonCleared = true;
     survivors.forEach(s => { s.loc = solarIdx; s.status = 'idle'; });
   } else {
-    // retreat survivors back to where they came from
     const retreatTo = fromIdx ?? solarIdx;
     survivors.forEach(s => { s.loc = retreatTo; s.status = 'idle'; });
-    // weaken garrison by losses dealt
     const enemyLost = startEnemyCount - enemySurvived;
     if (enemyLost > 0) {
       let remaining = enemyLost;
@@ -2922,7 +2959,12 @@ function engageFleetBattle(shipIds, solarIdx, fromIdx) {
     }
   }
 
-  const html = `
+  return {won, survivors, lost, enemySurvived};
+}
+
+function _fleetBattleReportHTML(result, sol, startPlayerCount, startEnemyCount, fromIdx, solarIdx) {
+  const {won, survivors, lost, enemySurvived} = result;
+  return `
     <div class="sm-section">
       <div class="sec-hdr" style="color:${won ? 'var(--mil)' : 'var(--blood)'}">${won ? '⚔ VICTORY' : '⚔ FORCES REPELLED'}</div>
       <div style="font-size:11px;line-height:1.8">
@@ -2934,10 +2976,235 @@ function engageFleetBattle(shipIds, solarIdx, fromIdx) {
                   ? 'Surviving ships have retreated to ' + state.solar[fromIdx ?? solarIdx].name + '.'
                   : 'The fleet was completely destroyed.')}
       </div>
-      <button class="action-btn" style="margin-top:10px" onclick="closeModal();renderStarMap()">CONTINUE</button>
+      <button class="action-btn" style="margin-top:10px" onclick="_closeFleetBattle()">CONTINUE</button>
     </div>`;
-  openModal(won ? '// SYSTEM CAPTURED //' : '// BATTLE REPORT //', html);
+}
+
+// Auto-resolve a fleet battle instantly (used as a fallback / for tests).
+// shipIds = player ships present at the system.
+function engageFleetBattle(shipIds, solarIdx, fromIdx) {
+  const garrison = getFleetGarrison(solarIdx);
+  const sol = state.solar[solarIdx];
+  if (!garrison) return;
+
+  const playerShips = shipIds.map(id => state.fleet.ships.find(s => s.id === id)).filter(Boolean);
+  const enemyShips = _enemyFleetUnits(garrison);
+  const startPlayerCount = playerShips.length;
+  const startEnemyCount = enemyShips.length;
+
+  let round = 0;
+  let over = false;
+  while (!over && round < 100) {
+    round++;
+    over = _resolveFleetRound(playerShips, enemyShips);
+  }
+
+  const result = _finishFleetBattle(playerShips, enemyShips, solarIdx, fromIdx, garrison, startPlayerCount, startEnemyCount);
+  const html = _fleetBattleReportHTML(result, sol, startPlayerCount, startEnemyCount, fromIdx, solarIdx);
+  openModal(result.won ? '// SYSTEM CAPTURED //' : '// BATTLE REPORT //', html.replace('_closeFleetBattle()', 'closeModal();renderStarMap()'));
   renderAllResBars();
+}
+
+// ─── ANIMATED FLEET VS FLEET BATTLE SCREEN ──────────────────────────────────
+
+let _fleetBattleRafId = null;
+let _fleetBattleRoundTimer = null;
+
+const SHIP_SHAPES = {
+  miner: 'circle', fighter: 'triangle', carrier: 'hex', cruiser: 'diamond', dreadnaught: 'star',
+};
+
+function _drawShip(ctx, s, x, y, isPlayer, now) {
+  if (s.hp <= 0) {
+    // explosion fade-out effect
+    const age = now - (s._deathTime || now);
+    if (age > 600) return;
+    const alpha = 1 - age / 600;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#ffaa40';
+    ctx.lineWidth = 2;
+    const r = 6 + (age / 600) * 14;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+  const flash = (now - (s.lastHit || 0)) < 200;
+  const hpRatio = Math.max(0, s.hp / s.maxHp);
+  const baseColor = isPlayer
+    ? (flash ? '#ffffff' : `rgba(40,120,255,${0.7 + hpRatio * 0.3})`)
+    : (flash ? '#ffffff' : `rgba(255,40,40,${0.7 + hpRatio * 0.3})`);
+  const shape = SHIP_SHAPES[s.class] || 'circle';
+  ctx.save();
+  ctx.fillStyle = baseColor;
+  if (shape === 'circle') {
+    ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI*2); ctx.fill();
+  } else if (shape === 'triangle') {
+    const dir = isPlayer ? -1 : 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y + dir*9);
+    ctx.lineTo(x - 7, y - dir*7);
+    ctx.lineTo(x + 7, y - dir*7);
+    ctx.closePath(); ctx.fill();
+  } else if (shape === 'diamond') {
+    const s2 = 9;
+    ctx.beginPath();
+    ctx.moveTo(x, y - s2); ctx.lineTo(x + s2, y); ctx.lineTo(x, y + s2); ctx.lineTo(x - s2, y);
+    ctx.closePath(); ctx.fill();
+  } else if (shape === 'hex') {
+    const r = 9;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI/3 * i - Math.PI/2;
+      const px = x + Math.cos(a)*r, py = y + Math.sin(a)*r;
+      if (i === 0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+    }
+    ctx.closePath(); ctx.fill();
+  } else if (shape === 'star') {
+    const rOut = 12, rIn = 5;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = Math.PI/5 * i - Math.PI/2;
+      const r = i % 2 === 0 ? rOut : rIn;
+      const px = x + Math.cos(a)*r, py = y + Math.sin(a)*r;
+      if (i === 0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+    }
+    ctx.closePath(); ctx.fill();
+  }
+  // HP bar
+  ctx.fillStyle = '#333';
+  ctx.fillRect(x - 9, y - 18, 18, 4);
+  ctx.fillStyle = hpRatio > 0.5 ? '#40e040' : hpRatio > 0.25 ? '#e0e040' : '#e04040';
+  ctx.fillRect(x - 9, y - 18, 18 * hpRatio, 4);
+  ctx.restore();
+}
+
+function _drawFleetBattlefield(canvas, now) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const fb = state._fleetBattle;
+  ctx.fillStyle = '#06080c';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.setLineDash([4,4]);
+  ctx.beginPath(); ctx.moveTo(0, H*0.5); ctx.lineTo(W, H*0.5); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '10px monospace';
+  ctx.fillText('YOUR FLEET', 10, H - 10);
+  ctx.fillText('ENEMY FLEET', 10, 16);
+
+  const layout = (ships, yBase) => {
+    const cols = Math.ceil(Math.sqrt(ships.length)) || 1;
+    const spacing = Math.min(40, (W - 40) / cols);
+    ships.forEach((s, i) => {
+      const col = i % cols, row = Math.floor(i / cols);
+      const x = 30 + col * spacing;
+      const y = yBase + row * 34 * (yBase < H/2 ? 1 : -1);
+      _drawShip(ctx, s, x, y, ships === fb.playerShips, now);
+    });
+  };
+  layout(fb.playerShips, H * 0.75);
+  layout(fb.enemyShips, H * 0.25);
+
+  if (fb.phase === 'done') {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, H*0.35, W, H*0.3);
+    ctx.fillStyle = fb.result.won ? '#40ff40' : '#ff4040';
+    ctx.font = 'bold 22px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(fb.result.won ? '// VICTORY //' : '// DEFEAT //', W/2, H*0.55);
+    ctx.textAlign = 'left';
+  }
+}
+
+// Advance one combat round (called on a timer, ~1.2s apart).
+function _fleetBattleTick() {
+  const fb = state._fleetBattle;
+  if (!fb || fb.phase !== 'battle') return;
+  const over = _resolveFleetRound(fb.playerShips, fb.enemyShips);
+  // mark just-destroyed ships for fade animation
+  const now = Date.now();
+  [...fb.playerShips, ...fb.enemyShips].forEach(s => {
+    if (s.hp <= 0 && !s._deathTime) s._deathTime = now;
+  });
+  if (over || fb.round >= 100) {
+    _endFleetBattle();
+    return;
+  }
+  fb.round++;
+}
+
+function _endFleetBattle() {
+  const fb = state._fleetBattle;
+  if (_fleetBattleRoundTimer) { clearInterval(_fleetBattleRoundTimer); _fleetBattleRoundTimer = null; }
+  fb.phase = 'done';
+  const result = _finishFleetBattle(fb.playerShips, fb.enemyShips, fb.solarIdx, fb.fromIdx, fb.garrison, fb.startPlayerCount, fb.startEnemyCount);
+  fb.result = result;
+  const sol = state.solar[fb.solarIdx];
+  const el = document.getElementById('fb-body');
+  if (el) {
+    el.innerHTML = _fleetBattleReportHTML(result, sol, fb.startPlayerCount, fb.startEnemyCount, fb.fromIdx, fb.solarIdx);
+  }
+  renderAllResBars();
+}
+
+function _closeFleetBattle() {
+  if (_fleetBattleRafId) { cancelAnimationFrame(_fleetBattleRafId); _fleetBattleRafId = null; }
+  if (_fleetBattleRoundTimer) { clearInterval(_fleetBattleRoundTimer); _fleetBattleRoundTimer = null; }
+  state._fleetBattle = null;
+  showStarMap();
+}
+
+// Open the animated fleet-vs-fleet battle screen.
+// shipIds = player ships present at the system; runs an animated
+// round-by-round simulation, then applies the same outcome logic as
+// engageFleetBattle.
+function openFleetBattle(shipIds, solarIdx, fromIdx) {
+  const garrison = getFleetGarrison(solarIdx);
+  const sol = state.solar[solarIdx];
+  if (!garrison) return;
+
+  const playerShips = shipIds.map(id => state.fleet.ships.find(s => s.id === id)).filter(Boolean);
+  const enemyShips = _enemyFleetUnits(garrison);
+
+  state._fleetBattle = {
+    phase: 'battle', round: 0,
+    playerShips, enemyShips, garrison,
+    solarIdx, fromIdx,
+    startPlayerCount: playerShips.length,
+    startEnemyCount: enemyShips.length,
+    result: null,
+  };
+
+  const titleEl = document.getElementById('fb-title');
+  if (titleEl) titleEl.textContent = '⚔ FLEET BATTLE: ' + sol.name;
+  const backBtn = document.getElementById('fb-back');
+  if (backBtn) backBtn.onclick = () => _closeFleetBattle();
+  const bodyEl = document.getElementById('fb-body');
+  if (bodyEl) bodyEl.innerHTML = `<div style="font-size:11px;color:var(--muted)">Engaging hostile fleet at ${sol.name}...</div>`;
+
+  showScreen('fleetbattle');
+
+  const canvas = document.getElementById('fleetbattle-map');
+  if (canvas) {
+    canvas.width = canvas.parentElement ? (canvas.parentElement.clientWidth || 400) : 400;
+    canvas.height = 240;
+  }
+
+  if (_fleetBattleRoundTimer) clearInterval(_fleetBattleRoundTimer);
+  _fleetBattleRoundTimer = setInterval(_fleetBattleTick, 1200);
+
+  const loop = (now) => {
+    if (!state._fleetBattle) return;
+    if (canvas) _drawFleetBattlefield(canvas, now);
+    if (state._fleetBattle.phase === 'battle' || state._fleetBattle.phase === 'done') {
+      if (state._fleetBattle.phase === 'battle') _fleetBattleRafId = requestAnimationFrame(loop);
+    }
+  };
+  _fleetBattleRafId = requestAnimationFrame(loop);
 }
 
 function _smFormatDuration(ms) {
@@ -3227,6 +3494,15 @@ function renderWorldContinentList() {
     <div style="font-size:11px;font-weight:900;letter-spacing:1px;margin-bottom:10px">
       ${sol.name.toUpperCase()} — ${conqN}/${continents.length} CONTINENTS SECURED
     </div>`;
+  if (sol.colonized && sol.res) {
+    const r = sol.res;
+    html += `<div class="resource-bar" style="margin-bottom:10px">
+      <span class="rb">⛏ ${fmt(r.metal)}</span>
+      <span class="rb">🌾 ${fmt(r.food)}</span>
+      <span class="rb">👥 ${fmt(r.pop)}</span>
+      <span class="rb">⚡ ${fmt(r.energy)}</span>
+    </div>`;
+  }
   continents.forEach((cont, i) => {
     const threatColors = {DORMANT:'var(--mil)',GUARDED:'var(--gold)',FORTIFIED:'var(--blood)'};
     html += `<div style="padding:10px;background:var(--plate2);border:1px solid var(--edge);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
@@ -3577,7 +3853,15 @@ function serializeState() {
 }
 
 function deserializeState(json) {
-  return JSON.parse(json, (k, v) => (v && typeof v === 'object' && Array.isArray(v.__set)) ? new Set(v.__set) : v);
+  const loaded = JSON.parse(json, (k, v) => (v && typeof v === 'object' && Array.isArray(v.__set)) ? new Set(v.__set) : v);
+  // Old saves predate per-world resource pools — give colonized worlds a
+  // default starting pool so loading old saves doesn't crash.
+  if (loaded && Array.isArray(loaded.solar)) {
+    loaded.solar.forEach(sol => {
+      if (sol && !sol.isHome && sol.colonized && !sol.res) sol.res = _seedColonyRes();
+    });
+  }
+  return loaded;
 }
 
 function hasSave() { return !!localStorage.getItem('lg_save'); }

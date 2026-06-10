@@ -930,10 +930,13 @@ function showBuildMenu(contIdx, col, row, activeTab) {
 
     items += `<div style="padding:10px;background:var(--plate2);border:1px solid var(--edge);margin-bottom:8px">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
-        <div>
-          <span style="font-size:11px;font-weight:900;color:var(--text)">${def.name}</span>
-          <span style="font-size:9px;color:var(--muted);margin-left:6px">${sizeBadge}</span>
-          ${prodText ? `<span style="font-size:9px;color:var(--mil);margin-left:6px">${prodText}</span>` : ''}
+        <div style="display:flex;align-items:center;gap:8px">
+          <img src="${buildingIconDataURL(type)}" style="width:32px;height:32px;border:1px solid var(--edge);image-rendering:pixelated;flex-shrink:0">
+          <div>
+            <span style="font-size:11px;font-weight:900;color:var(--text)">${def.name}</span>
+            <span style="font-size:9px;color:var(--muted);margin-left:6px">${sizeBadge}</span>
+            ${prodText ? `<div style="font-size:9px;color:var(--mil);margin-top:2px">${prodText}</div>` : ''}
+          </div>
         </div>
         <span style="font-size:9px;font-weight:900;color:${statusColor};letter-spacing:1px">${statusText}</span>
       </div>
@@ -1167,9 +1170,12 @@ function renderBuildingDetail(bldg, contIdx) {
   // Header section
   html += `<div class="panel" style="margin-bottom:10px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">
-      <div>
-        <div style="font-size:14px;font-weight:900;letter-spacing:1px;color:var(--text)">${def.name}</div>
-        ${catName?`<div style="font-size:9px;color:var(--muted);margin-top:2px">${catName}</div>`:''}
+      <div style="display:flex;align-items:center;gap:10px">
+        <img src="${buildingIconDataURL(bldg.type)}" style="width:44px;height:44px;border:1px solid var(--edge);image-rendering:pixelated;flex-shrink:0">
+        <div>
+          <div style="font-size:14px;font-weight:900;letter-spacing:1px;color:var(--text)">${def.name}</div>
+          ${catName?`<div style="font-size:9px;color:var(--muted);margin-top:2px">${catName}</div>`:''}
+        </div>
       </div>
       <div style="text-align:right">
         <div style="font-size:11px;font-weight:900;padding:3px 8px;background:${bldg.built?'var(--mil)':'var(--gold)'};color:${bldg.built?'#fff':'#000'}">
@@ -1354,6 +1360,261 @@ function drawFarm(ctx, px, py, pw, ph, level) {
   }
 }
 
+function drawColonyCenter(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#1c2a4a';
+  ctx.fillRect(px + 1, py + ph * 0.35, pw - 2, ph * 0.65 - 1);
+  ctx.fillStyle = '#3a5590';
+  ctx.beginPath();
+  ctx.arc(px + pw / 2, py + ph * 0.38, pw * 0.32, Math.PI, 0);
+  ctx.fill();
+  ctx.strokeStyle = '#7fa8e0';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(px + pw / 2, py + ph * 0.12); ctx.lineTo(px + pw / 2, py + ph * 0.02); ctx.stroke();
+  ctx.fillStyle = '#ffd166';
+  ctx.beginPath(); ctx.arc(px + pw / 2, py + ph * 0.02, 1.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#9fc3ff';
+  for (let i = 0; i < 3; i++) ctx.fillRect(px + pw * (0.2 + i * 0.25), py + ph * 0.6, pw * 0.1, ph * 0.12);
+}
+
+function drawResourceCollector(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#3a2616';
+  ctx.fillRect(px + 1, py + ph * 0.55, pw - 2, ph * 0.45 - 1);
+  ctx.strokeStyle = '#a06838';
+  ctx.lineWidth = Math.max(1.5, pw * 0.06);
+  ctx.beginPath();
+  ctx.moveTo(px + pw * 0.2, py + ph * 0.55);
+  ctx.lineTo(px + pw * 0.5, py + ph * 0.08);
+  ctx.lineTo(px + pw * 0.8, py + ph * 0.55);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(px + pw * 0.5, py + ph * 0.08);
+  ctx.lineTo(px + pw * 0.5, py + ph * 0.55);
+  ctx.stroke();
+  ctx.fillStyle = '#e0a030';
+  ctx.beginPath(); ctx.arc(px + pw * 0.5, py + ph * 0.08, pw * 0.05, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawBarracks(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#4a2222';
+  ctx.fillRect(px + 1, py + ph * 0.3, pw - 2, ph * 0.7 - 1);
+  ctx.fillStyle = '#6a3030';
+  ctx.beginPath();
+  ctx.moveTo(px + pw * 0.5, py + ph * 0.05);
+  ctx.lineTo(px + pw - 1, py + ph * 0.3);
+  ctx.lineTo(px + 1, py + ph * 0.3);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#c04040';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(px + pw * 0.78, py + ph * 0.05); ctx.lineTo(px + pw * 0.78, py - ph * 0.08); ctx.stroke();
+  ctx.fillStyle = '#e05050';
+  ctx.fillRect(px + pw * 0.78, py - ph * 0.08, pw * 0.16, ph * 0.1);
+  ctx.fillStyle = '#ffcc66';
+  ctx.fillRect(px + pw * 0.3, py + ph * 0.5, pw * 0.12, ph * 0.12);
+  ctx.fillRect(px + pw * 0.58, py + ph * 0.5, pw * 0.12, ph * 0.12);
+}
+
+function drawHousingBlock(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#1c3a4a';
+  ctx.fillRect(px + 1, py + 1, pw - 2, ph - 2);
+  ctx.fillStyle = '#ffd166';
+  const cols = 3, rows = 3;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if ((r + c) % 2 === 0) {
+        ctx.fillStyle = '#ffd166';
+      } else {
+        ctx.fillStyle = '#3d5a70';
+      }
+      ctx.fillRect(px + pw * (0.12 + c * 0.28), py + ph * (0.12 + r * 0.28), pw * 0.18, ph * 0.18);
+    }
+  }
+}
+
+function drawResearchCenter(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#241c40';
+  ctx.fillRect(px + 1, py + ph * 0.4, pw - 2, ph * 0.6 - 1);
+  ctx.fillStyle = '#4530a0';
+  ctx.beginPath();
+  ctx.arc(px + pw / 2, py + ph * 0.4, pw * 0.34, Math.PI, 0);
+  ctx.fill();
+  const g = ctx.createRadialGradient(px + pw/2, py + ph*0.32, 1, px + pw/2, py + ph*0.32, pw*0.14);
+  g.addColorStop(0, '#bff0ff');
+  g.addColorStop(1, 'rgba(120,220,255,0.1)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(px + pw / 2, py + ph * 0.32, pw * 0.13, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawPowerRelay(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#3a3010';
+  ctx.fillRect(px + 1, py + ph * 0.65, pw - 2, ph * 0.35 - 1);
+  ctx.strokeStyle = '#c0a030';
+  ctx.lineWidth = Math.max(1.5, pw * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(px + pw * 0.5, py + ph * 0.65);
+  ctx.lineTo(px + pw * 0.5, py + ph * 0.05);
+  ctx.stroke();
+  for (const f of [0.25, 0.45, 0.65]) {
+    ctx.beginPath();
+    ctx.ellipse(px + pw * 0.5, py + ph * f, pw * 0.18, ph * 0.06, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#ffe066';
+  ctx.beginPath();
+  ctx.moveTo(px + pw * 0.55, py + ph * 0.45);
+  ctx.lineTo(px + pw * 0.42, py + ph * 0.65);
+  ctx.lineTo(px + pw * 0.52, py + ph * 0.65);
+  ctx.lineTo(px + pw * 0.4, py + ph * 0.85);
+  ctx.lineTo(px + pw * 0.6, py + ph * 0.6);
+  ctx.lineTo(px + pw * 0.5, py + ph * 0.6);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawTradePost(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#1c3a28';
+  ctx.fillRect(px + 1, py + ph * 0.35, pw - 2, ph * 0.65 - 1);
+  ctx.fillStyle = '#3a8050';
+  ctx.fillRect(px + 1, py + ph * 0.3, pw - 2, ph * 0.1);
+  ctx.strokeStyle = '#5ac080';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(px + pw * (0.1 + i * 0.25), py + ph * 0.4);
+    ctx.lineTo(px + pw * (0.05 + i * 0.25), py + ph * 0.65);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#c8a050';
+  ctx.fillRect(px + pw * 0.55, py + ph * 0.7, pw * 0.3, ph * 0.22);
+}
+
+function drawStorehouse(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#383838';
+  ctx.fillRect(px + 1, py + ph * 0.25, pw - 2, ph * 0.75 - 1);
+  ctx.fillStyle = '#505050';
+  ctx.beginPath();
+  ctx.moveTo(px + 1, py + ph * 0.25);
+  ctx.lineTo(px + pw / 2, py + ph * 0.05);
+  ctx.lineTo(px + pw - 1, py + ph * 0.25);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#9a8050';
+  for (const [cx, cy, s] of [[0.28,0.5,0.22],[0.6,0.55,0.26],[0.42,0.78,0.2]]) {
+    ctx.fillRect(px + pw * cx, py + ph * cy, pw * s, pw * s);
+  }
+}
+
+function drawExcellorantFactory(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#1a2840';
+  ctx.fillRect(px + 1, py + ph * 0.3, pw - 2, ph * 0.7 - 1);
+  const cx = px + pw / 2, cy = py + ph * 0.32;
+  const g = ctx.createRadialGradient(cx, cy, 1, cx, cy, pw * 0.22);
+  g.addColorStop(0, '#aef6ff');
+  g.addColorStop(1, '#2a6ad0');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - ph * 0.22);
+  ctx.lineTo(cx + pw * 0.18, cy);
+  ctx.lineTo(cx, cy + ph * 0.22);
+  ctx.lineTo(cx - pw * 0.18, cy);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawSpaceport(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#1c2030';
+  ctx.fillRect(px + 1, py + ph * 0.6, pw - 2, ph * 0.4 - 1);
+  ctx.strokeStyle = '#5a6a90';
+  ctx.lineWidth = 1;
+  for (const r of [0.4, 0.55]) {
+    ctx.beginPath();
+    ctx.ellipse(px + pw / 2, py + ph * 0.6, pw * r, ph * 0.08, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#d0d8e8';
+  ctx.beginPath();
+  ctx.moveTo(px + pw * 0.5, py + ph * 0.05);
+  ctx.lineTo(px + pw * 0.62, py + ph * 0.5);
+  ctx.lineTo(px + pw * 0.38, py + ph * 0.5);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ff8040';
+  ctx.beginPath();
+  ctx.moveTo(px + pw * 0.45, py + ph * 0.5);
+  ctx.lineTo(px + pw * 0.5, py + ph * 0.68);
+  ctx.lineTo(px + pw * 0.55, py + ph * 0.5);
+  ctx.closePath(); ctx.fill();
+}
+
+function drawCommodityExchange(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#1c3020';
+  ctx.fillRect(px + 1, py + 1, pw - 2, ph - 2);
+  ctx.fillStyle = '#5ac080';
+  const bars = [0.3, 0.55, 0.4, 0.7];
+  bars.forEach((h, i) => {
+    ctx.fillRect(px + pw * (0.12 + i * 0.2), py + ph * (0.85 - h * 0.65), pw * 0.12, ph * 0.65 * h);
+  });
+}
+
+function drawDefenseGrid(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#3a1c20';
+  ctx.fillRect(px + 1, py + ph * 0.45, pw - 2, ph * 0.55 - 1);
+  ctx.fillStyle = '#a04050';
+  ctx.beginPath();
+  ctx.arc(px + pw / 2, py + ph * 0.45, pw * 0.3, Math.PI, 0);
+  ctx.fill();
+  ctx.strokeStyle = '#ff6070';
+  ctx.lineWidth = Math.max(1.5, pw * 0.05);
+  ctx.beginPath();
+  ctx.moveTo(px + pw / 2, py + ph * 0.45);
+  ctx.lineTo(px + pw / 2, py + ph * 0.1);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(px + pw * 0.5, py + ph * 0.18);
+  ctx.lineTo(px + pw * 0.7, py + ph * 0.05);
+  ctx.stroke();
+}
+
+function drawTerraformer(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#1c3a34';
+  ctx.fillRect(px + 1, py + ph * 0.45, pw - 2, ph * 0.55 - 1);
+  ctx.fillStyle = '#2a8a60';
+  ctx.beginPath();
+  ctx.arc(px + pw / 2, py + ph * 0.45, pw * 0.28, Math.PI, 0);
+  ctx.fill();
+  ctx.strokeStyle = '#7adba0';
+  ctx.lineWidth = Math.max(1.2, pw * 0.04);
+  ctx.beginPath();
+  ctx.moveTo(px + pw * 0.5, py + ph * 0.45);
+  ctx.quadraticCurveTo(px + pw * 0.35, py + ph * 0.25, px + pw * 0.42, py + ph * 0.1);
+  ctx.stroke();
+  ctx.fillStyle = '#7adba0';
+  ctx.beginPath();
+  ctx.ellipse(px + pw * 0.42, py + ph * 0.1, pw * 0.08, ph * 0.05, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+const _iconCache = {};
+function buildingIconDataURL(type) {
+  if (_iconCache[type]) return _iconCache[type];
+  const drawer = BUILDING_DRAWERS[type];
+  const size = 40;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#0c1018';
+  ctx.fillRect(0, 0, size, size);
+  if (drawer) drawer(ctx, 0, 0, size, size, 1);
+  const url = c.toDataURL();
+  _iconCache[type] = url;
+  return url;
+}
+
+const BUILDING_DRAWERS = {
+  colonyCenter: drawColonyCenter, resourceCollector: drawResourceCollector,
+  barracks: drawBarracks, farm: (ctx,px,py,pw,ph,lvl)=>drawFarm(ctx,px,py,pw,ph,lvl),
+  housingBlock: drawHousingBlock, researchCenter: drawResearchCenter,
+  powerRelay: drawPowerRelay, tradePost: drawTradePost, storehouse: drawStorehouse,
+  excellorantFactory: drawExcellorantFactory, spaceport: drawSpaceport,
+  commodityExchange: drawCommodityExchange, defenseGrid: drawDefenseGrid,
+  terraformer: drawTerraformer,
+};
+
 function drawGridBuilding(ctx, bldg, cellSize, now) {
   const def = BUILDING_DEFS[bldg.type];
   if (!def) return;
@@ -1383,22 +1644,16 @@ function drawGridBuilding(ctx, bldg, cellSize, now) {
     ctx.fillText(Math.floor(progress * 100) + '%', px + 4, py + ph - 10);
     return;
   }
-  if (bldg.type === 'farm') {
-    drawFarm(ctx, px, py, pw, ph, bldg.level);
+  const drawer = BUILDING_DRAWERS[bldg.type];
+  if (drawer) {
+    drawer(ctx, px, py, pw, ph, bldg.level);
   } else {
-    const colors = {
-      colonyCenter:'#305090', resourceCollector:'#704020', barracks:'#502020',
-      housingBlock:'#204050', researchCenter:'#403080', powerRelay:'#504010',
-      tradePost:'#305040', storehouse:'#404040', excellorantFactory:'#304060',
-      spaceport:'#203060', commodityExchange:'#305030', defenseGrid:'#502030',
-      terraformer:'#203030',
-    };
-    ctx.fillStyle = colors[bldg.type] || '#334';
+    ctx.fillStyle = '#334';
     ctx.fillRect(px + 1, py + 1, pw - 2, ph - 2);
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
   }
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
   // overdrive glow
   const odExp = state.overdrive[bldg._uid];
   if (odExp && now < odExp) {
@@ -1416,20 +1671,6 @@ function drawGridBuilding(ctx, bldg, cellSize, now) {
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 9px monospace';
   ctx.fillText(bldg.level, px + pw - 10, py + 12);
-  // building icon
-  ctx.font = Math.floor(cellSize * 0.6) + 'px serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  const icons2 = {
-    colonyCenter:'🏛', resourceCollector:'⛏', barracks:'⚔', farm:'🌾',
-    housingBlock:'🏠', researchCenter:'⚛', powerRelay:'⚡', tradePost:'💰',
-    storehouse:'📦', excellorantFactory:'💠', spaceport:'🚀',
-    commodityExchange:'📊', defenseGrid:'🛡', terraformer:'🌱',
-  };
-  const icon = icons2[bldg.type] || '?';
-  ctx.fillText(icon, px + pw / 2, py + ph / 2);
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
 }
 
 function drawContinentMap(canvas, cont) {

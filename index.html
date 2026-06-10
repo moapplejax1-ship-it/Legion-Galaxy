@@ -205,7 +205,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   <!-- screen-continent -->
   <div id="screen-continent" class="screen">
     <div class="topbar">
-      <button class="back-btn" onclick="goHome()">← BACK</button>
+      <button class="back-btn" id="cont-back" onclick="goHome()">← BACK</button>
       <span class="topbar-title" id="cont-title">CONTINENT</span>
       <div style="width:60px"></div>
     </div>
@@ -529,25 +529,55 @@ const state = {
   fleet:{ships:[], buildQueue:[]},
   terraforming:{},
   _uid:0, _tradeRateSeed:Date.now(), _energyOnline:{},
+  _invasionTarget: null,
 };
+
+// Returns the continents array currently being managed/invaded:
+// state.planet.continents for the homeworld, or sol.continents for
+// an off-world invasion target (state._invasionTarget = solar idx).
+function getActiveContinents() {
+  if (state._invasionTarget !== null && state._invasionTarget !== undefined) {
+    const sol = state.solar[state._invasionTarget];
+    if (sol && sol.continents) return sol.continents;
+  }
+  return state.planet.continents;
+}
 
 // ─── SECTION 3: UTILITY FUNCTIONS ───────────────────────────────────────────
 
-function genAliens(threat, seed) {
+// mult: optional defense multiplier (e.g. off-world "established defenses").
+// Hook point for future player-built/AI defense upgrades on alien worlds.
+function genAliens(threat, seed, mult) {
   const rng = mkRng(seed);
-  if (threat === 'DORMANT') return {infantry:60, tanks:10, cavalry:5};
-  if (threat === 'GUARDED') {
-    return {
+  mult = mult || 1;
+  let base;
+  if (threat === 'DORMANT') base = {infantry:60, tanks:10, cavalry:5};
+  else if (threat === 'GUARDED') {
+    base = {
       infantry: Math.floor(180 + rng()*80),
       tanks:    Math.floor(40  + rng()*40),
       cavalry:  Math.floor(20  + rng()*30),
     };
+  } else {
+    base = {
+      infantry: Math.floor(380 + rng()*120),
+      tanks:    Math.floor(120 + rng()*80),
+      cavalry:  Math.floor(60  + rng()*60),
+    };
   }
-  return {
-    infantry: Math.floor(380 + rng()*120),
-    tanks:    Math.floor(120 + rng()*80),
-    cavalry:  Math.floor(60  + rng()*60),
-  };
+  if (mult !== 1) {
+    base.infantry = Math.floor(base.infantry * mult);
+    base.tanks    = Math.floor(base.tanks    * mult);
+    base.cavalry  = Math.floor(base.cavalry  * mult);
+  }
+  return base;
+}
+
+// Off-world "established defenses" multiplier for FORTIFIED/GUARDED continents.
+function offWorldDefenseMult(threat) {
+  if (threat === 'FORTIFIED') return 1.25;
+  if (threat === 'GUARDED')   return 1.15;
+  return 1;
 }
 
 state.planet.continents.forEach((c) => {
@@ -703,6 +733,7 @@ function productionTick() {
 }
 
 function _productionTickCore() {
+  _supplyTick();
   applyEnergy();
   const allProdBonus = 1 + getResearchBonus('allProduction');
   state.planet.continents.forEach(c => {
@@ -903,7 +934,7 @@ function rushConstruction(contIdx, uid, cost) {
 }
 
 function getBribeOption(contIdx) {
-  const cont = state.planet.continents[contIdx];
+  const cont = getActiveContinents()[contIdx];
   if (!cont || !cont.aliens) return {cost:200, canAfford:false};
   const total = (cont.aliens.infantry || 0) + (cont.aliens.tanks || 0) + (cont.aliens.cavalry || 0);
   const cost = 200 + total * 2;
@@ -914,7 +945,7 @@ function bribeGarrison(contIdx) {
   const opt = getBribeOption(contIdx);
   if (!opt.canAfford) { toast('// INSUFFICIENT CREDITS //'); return; }
   state.res.credits -= opt.cost;
-  const cont = state.planet.continents[contIdx];
+  const cont = getActiveContinents()[contIdx];
   if (cont.aliens) {
     cont.aliens.infantry = Math.floor((cont.aliens.infantry || 0) * 0.80);
     cont.aliens.tanks    = Math.floor((cont.aliens.tanks    || 0) * 0.80);
@@ -937,12 +968,16 @@ function spUnlocked() {
 
 function openContinent(idx) {
   state.selCont = idx;
-  const cont = state.planet.continents[idx];
+  const cont = getActiveContinents()[idx];
   const titleEl = document.getElementById('cont-title');
   if (titleEl) titleEl.textContent = cont.name;
   const backBtn = document.getElementById('cont-back');
-  if (backBtn) backBtn.onclick = goHome;
+  if (backBtn) {
+    backBtn.onclick = (state._invasionTarget !== null) ? () => openWorldContinents(state._invasionTarget) : goHome;
+  }
   showScreen('continent');
+  const mapCanvas = document.getElementById('cont-map');
+  if (mapCanvas) mapCanvas.style.display = '';
   refreshContMap();
   renderContBody();
   renderAllResBars();
@@ -986,7 +1021,7 @@ function canPlace(cont, col, row, type) {
 
 function showBuildMenu(contIdx, col, row, activeTab) {
   activeTab = activeTab || 'production';
-  const cont = state.planet.continents[contIdx];
+  const cont = getActiveContinents()[contIdx];
   if (!cont.conquered) { toast('// CONQUER FIRST //'); return; }
 
   const tabBar = Object.entries(BUILD_CATEGORIES).map(([key, cat]) =>
@@ -1048,7 +1083,7 @@ function showBuildMenu(contIdx, col, row, activeTab) {
 }
 
 function buildStructure(contIdx, col, row, type) {
-  const cont = state.planet.continents[contIdx];
+  const cont = getActiveContinents()[contIdx];
   const def = BUILDING_DEFS[type];
   if (!def) return;
   if (!canPlace(cont, col, row, type)) { toast('// CANNOT PLACE HERE //'); return; }
@@ -1097,7 +1132,7 @@ function setupMapClick() {
 function refreshContMap() {
   const canvas = document.getElementById('cont-map');
   if (!canvas) return;
-  const cont = state.planet.continents[state.selCont];
+  const cont = getActiveContinents()[state.selCont];
   if (!cont) return;
   const container = canvas.parentElement;
   canvas.width  = container ? (container.clientWidth || GCOLS * CELL) : GCOLS * CELL;
@@ -1113,7 +1148,7 @@ function renderContBody() {
   const el = document.getElementById('cont-body');
   if (!el) return;
   const idx = state.selCont;
-  const cont = state.planet.continents[idx];
+  const cont = getActiveContinents()[idx];
   if (!cont) return;
   const bribeOpt = getBribeOption(idx);
   const threatColors = {DORMANT:'var(--mil)',GUARDED:'var(--gold)',FORTIFIED:'var(--blood)'};
@@ -1151,9 +1186,10 @@ function renderContBody() {
       </div>
       <div style="font-size:9px;color:var(--muted);margin-bottom:10px">Total strength: ${total} units</div>
       <div style="display:flex;gap:8px">
-        <button class="action-btn blood" style="flex:1" onclick="openInvasion(${idx})">⚔ INVADE</button>
+        <button class="action-btn blood" style="flex:1" ${_supplyLinesStrained() ? 'disabled' : ''} onclick="openInvasion(${idx})">⚔ INVADE</button>
         <button class="action-btn gold" style="flex:1" ${bribeOpt.canAfford?'':'disabled'} onclick="bribeGarrison(${idx})">💰 BRIBE (${fmt(bribeOpt.cost)} cr)</button>
       </div>
+      ${_supplyLinesStrained() ? '<div style="font-size:9px;color:var(--blood);margin-top:6px">// SUPPLY LINES STRAINED — INVASION STALLED //</div>' : ''}
     </div>`;
   }
 
@@ -1375,7 +1411,7 @@ function renderBuildingDetail(bldg, contIdx) {
 }
 
 function upgradeBuilding(uid, contIdx) {
-  const cont = state.planet.continents[contIdx];
+  const cont = getActiveContinents()[contIdx];
   if (!cont) return;
   const bldg = cont.bldgs.find(b => b._uid === uid);
   if (!bldg || !bldg.built) return;
@@ -1936,7 +1972,7 @@ function _genEnemyUnits(aliens, contIdx) {
 }
 
 function openInvasion(contIdx) {
-  const cont = state.planet.continents[contIdx];
+  const cont = getActiveContinents()[contIdx];
   state.invasion = {
     contIdx, phase: 'deploy',
     playerUnits: [], enemyUnits: [],
@@ -1963,7 +1999,7 @@ function renderInvasionDeploy() {
   const el = document.getElementById('inv-body');
   if (!el) return;
   const inv = state.invasion;
-  const cont = state.planet.continents[inv.contIdx];
+  const cont = getActiveContinents()[inv.contIdx];
   let html = `<div class="inv-deploy">
     <h3>⚔ INVADE: ${cont.name} [${cont.threat}]</h3>
     <div class="inv-garrison">Enemy: 🪖${cont.aliens ? cont.aliens.infantry : 0} 🚂${cont.aliens ? cont.aliens.tanks : 0} 🐴${cont.aliens ? cont.aliens.cavalry : 0}</div>
@@ -2108,7 +2144,7 @@ function _drawBattlefield(canvas, now) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const inv = state.invasion;
-  const cont = state.planet.continents[inv.contIdx];
+  const cont = getActiveContinents()[inv.contIdx];
   ctx.fillStyle = '#0a1008';
   ctx.fillRect(0, 0, W, H);
   if (cont.threat === 'FORTIFIED' || cont.threat === 'GUARDED') {
@@ -2221,7 +2257,7 @@ function _endBattle(result) {
   });
   const el = document.getElementById('inv-body');
   if (el) {
-    const cont = state.planet.continents[state.invasion.contIdx];
+    const cont = getActiveContinents()[state.invasion.contIdx];
     const resultMsg = result === 'victory' ? '// VICTORY //' : '// DEFEAT //';
     const actionBtn = result === 'victory'
       ? `<button onclick="finalizeVictory(${state.invasion.contIdx})">CLAIM TERRITORY</button>`
@@ -2236,7 +2272,8 @@ function _endBattle(result) {
 }
 
 function finalizeVictory(contIdx) {
-  const cont = state.planet.continents[contIdx];
+  const continents = getActiveContinents();
+  const cont = continents[contIdx];
   cont.conquered = true;
   cont.aliens    = null;
   // place colony center
@@ -2244,6 +2281,20 @@ function finalizeVictory(contIdx) {
     cont.bldgs.push({_uid: state._uid++, type:'colonyCenter', col:0, row:0, level:1, built:true, buildEnd:null});
   }
   toast('// CONTINENT SECURED //');
+  if (state._invasionTarget !== null && state._invasionTarget !== undefined) {
+    const sol = state.solar[state._invasionTarget];
+    if (sol && continents.every(c => c.conquered)) {
+      sol.colonized = true;
+      sol._invading = false;
+      const targetIdx = state._invasionTarget;
+      state._invasionTarget = null;
+      toast('// WORLD SECURED: ' + sol.name + ' COLONIZED //');
+      showSolarSystem();
+      return;
+    }
+    openWorldContinents(state._invasionTarget);
+    return;
+  }
   renderHome();
   showScreen('home');
 }
@@ -3061,7 +3112,12 @@ function showSolarSystem() {
       const colonizeCost = 1000 + idx * 500;
       const tfProg = sol.inhospitable ? Math.floor(getTerraformingProgress(idx) * 100) : 100;
       let colonizeBtn = '';
-      if (!sol.colonized && !sol.inhospitable && spUnlocked()) {
+      if (sol._invading) {
+        const conqN = (sol.continents || []).filter(c => c.conquered).length;
+        const total = (sol.continents || []).length;
+        colonizeBtn = `<div style="font-size:9px;color:var(--gold);margin:4px 0">// INVASION IN PROGRESS — ${conqN}/${total} CONTINENTS SECURED //</div>
+          <button onclick="openWorldContinents(${idx})">CONTINUE INVASION</button>`;
+      } else if (!sol.colonized && !sol.inhospitable && spUnlocked()) {
         if (canColonize) {
           colonizeBtn = `<button onclick="colonizePlanet(${idx})">COLONIZE (${colonizeCost} metal)</button>`;
         } else if (!hasDoctrine) {
@@ -3070,15 +3126,16 @@ function showSolarSystem() {
           colonizeBtn = `<span class="tag-locked">🔒 Max colonies reached (${colonyCount()}/${MAX_COLONIES})</span>`;
         }
       }
+      const statusText = sol._invading ? 'INVASION IN PROGRESS' : (sol.colonized ? 'COLONIZED' : 'UNCLAIMED');
       html += `<div class="solar-card">
         <canvas id="planet-canvas-${idx}" width="80" height="80"></canvas>
         <div class="solar-info">
           <b>${sol.name}</b>${sol.isHome ? ' [HOME]' : ''}${sol.isAgri ? ' [AGRI]' : ''}<br>
-          Status: ${sol.colonized ? 'COLONIZED' : 'UNCLAIMED'}<br>
+          Status: ${statusText}<br>
           ${sol.inhospitable ? `Inhospitable — Terraform: ${tfProg}%` : ''}
           ${!sol.colonized && sol.inhospitable ? `<button onclick="sendTerraformingResources(${idx},'metal',500)">TF +500m</button>` : ''}
           ${colonizeBtn}
-          ${sol.colonized && !sol.isHome ? '<span class="tag-col">Active</span>' : ''}
+          ${sol.colonized && !sol.isHome ? `<span class="tag-col">Active</span> <button onclick="openWorldContinents(${idx})">MANAGE COLONY</button>` : ''}
         </div>
       </div>`;
     });
@@ -3099,10 +3156,97 @@ function colonyCount() {
   return state.solar.filter(s => s.colonized && !s.isHome).length;
 }
 
+// Name pools for procedurally generated invasion-target continents.
+const _OFFWORLD_CONT_NAMES = [
+  'Threshold','Outpost','Bastion','Frontier','Reach','Hollow','Span',
+  'Meridian','Verge','Crossing','Hold','Marches','Expanse','Wastes',
+];
+
+function _genWorldContinents(sol, solIdx) {
+  const n = 3 + (mkRng(strSeed(sol.name) + solIdx)() < 0.5 ? 0 : 1) + (mkRng(strSeed(sol.name)+1)() < 0.5 ? 0 : 1);
+  const count = Math.min(5, Math.max(3, n));
+  const threats = ['DORMANT','GUARDED','GUARDED','FORTIFIED','FORTIFIED'];
+  const continents = [];
+  for (let i = 0; i < count; i++) {
+    const name = sol.name.split(' ')[0] + ' ' + _OFFWORLD_CONT_NAMES[(strSeed(sol.name) + i) % _OFFWORLD_CONT_NAMES.length];
+    const threat = threats[i % threats.length];
+    const cont = {name, conquered:false, threat, bldgs:[], aliens:null};
+    // Off-world "established defenses": FORTIFIED/GUARDED continents get a
+    // small extra defense multiplier vs. equivalent home-planet threats.
+    // Hook point for future player-built/AI defense upgrades on alien worlds.
+    cont.aliens = genAliens(threat, strSeed(name), offWorldDefenseMult(threat));
+    continents.push(cont);
+  }
+  return continents;
+}
+
+// Returns true if the home planet's supply reserves are too low to sustain
+// active off-world invasions (food/metal drained per tick — see _supplyTick).
+function _supplyLinesStrained() {
+  if (state._invasionTarget === null || state._invasionTarget === undefined) return false;
+  return (state.res.food || 0) <= 0 || (state.res.metal || 0) <= 0;
+}
+
+// Drains home-planet food/metal each tick to sustain ground forces on
+// off-world invasions. Called from _productionTickCore.
+function _supplyTick() {
+  state.solar.forEach((sol, idx) => {
+    if (sol.isHome || !sol._invading || !sol.continents) return;
+    const unconquered = sol.continents.filter(c => !c.conquered).length;
+    if (unconquered === 0) return;
+    const foodCost  = 2 * unconquered;
+    const metalCost = 1 * unconquered;
+    if ((state.res.food || 0) <= 0 || (state.res.metal || 0) <= 0) {
+      toast('// SUPPLY LINES STRAINED — INVASION STALLED //');
+      return;
+    }
+    state.res.food  = Math.max(0, (state.res.food  || 0) - foodCost);
+    state.res.metal = Math.max(0, (state.res.metal || 0) - metalCost);
+  });
+}
+
+function openWorldContinents(idx) {
+  state._invasionTarget = idx;
+  state.selCont = 0;
+  const sol = state.solar[idx];
+  // Reuse the home continent map screen, generalized via getActiveContinents().
+  const titleEl = document.getElementById('cont-title');
+  if (titleEl) titleEl.textContent = sol.name.toUpperCase() + ' — CONTINENTS';
+  showScreen('continent');
+  renderWorldContinentList();
+}
+
+function renderWorldContinentList() {
+  const el = document.getElementById('cont-body');
+  if (!el) return;
+  const idx = state._invasionTarget;
+  const sol = state.solar[idx];
+  const continents = sol.continents || [];
+  const conqN = continents.filter(c => c.conquered).length;
+  let html = `<div style="padding:10px">
+    <div style="font-size:11px;font-weight:900;letter-spacing:1px;margin-bottom:10px">
+      ${sol.name.toUpperCase()} — ${conqN}/${continents.length} CONTINENTS SECURED
+    </div>`;
+  continents.forEach((cont, i) => {
+    const threatColors = {DORMANT:'var(--mil)',GUARDED:'var(--gold)',FORTIFIED:'var(--blood)'};
+    html += `<div style="padding:10px;background:var(--plate2);border:1px solid var(--edge);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:11px;font-weight:900">${cont.name}</div>
+        <div style="font-size:9px;color:${cont.conquered?'var(--mil)':threatColors[cont.threat]}">${cont.conquered ? '✓ SECURED' : cont.threat}</div>
+      </div>
+      <button class="action-btn ${cont.conquered ? 'mil' : 'blood'}" onclick="openContinent(${i})">${cont.conquered ? 'MANAGE' : '⚔ INVADE'}</button>
+    </div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+  const canvas = document.getElementById('cont-map');
+  if (canvas) canvas.style.display = 'none';
+}
+
 function colonizePlanet(idx) {
   if (!spUnlocked()) { toast('// NEED 3 CONTINENTS + SPACEPORT //'); return; }
   const sol = state.solar[idx];
-  if (!sol || sol.colonized) return;
+  if (!sol || sol.colonized || sol._invading) return;
   if (!state.researchV2.has('colonizationDoctrine')) { toast('// REQUIRES COLONIZATION DOCTRINE RESEARCH //'); return; }
   if (colonyCount() >= MAX_COLONIES) { toast(`// MAX COLONIES REACHED (${MAX_COLONIES}) //`); return; }
   if (sol.inhospitable) { toast('// TERRAFORM FIRST //'); return; }
@@ -3110,10 +3254,13 @@ function colonizePlanet(idx) {
   const cost = 1000 + idx * 500;
   if ((state.res.metal || 0) < cost) { toast('// INSUFFICIENT METAL //'); return; }
   state.res.metal -= cost;
-  sol.colonized = true;
+  sol.continents = _genWorldContinents(sol, idx);
+  sol.colonized = false;
+  sol._invading = true;
+  state._invasionTarget = idx;
   renderAllResBars();
-  toast('// COLONIZED: ' + sol.name + ' //');
-  showSolarSystem();
+  toast('// INVASION LAUNCHED: ' + sol.name + ' //');
+  openWorldContinents(idx);
 }
 
 // ─── SECTION 11: HOME SCREEN & GLOBE VIEW ────────────────────────────────────

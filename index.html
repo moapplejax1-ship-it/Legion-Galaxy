@@ -300,7 +300,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 const BUILDING_DEFS = {
   colonyCenter:    {name:'Colony Center',    w:2,h:2, cost:{metal:0},     maxLevel:5, prod:{}, desc:'Command hub. Gates max upgrade level of all structures.'},
   resourceCollector:{name:'Resource Collector',w:2,h:2,cost:{metal:150},  maxLevel:5, prod:{res:'metal',base:15}, desc:'⛏ 15 metal/tick per level.'},
-  barracks:        {name:'Barracks',          w:2,h:2, cost:{metal:200,food:100}, maxLevel:5, prod:{}, desc:'Train infantry, tanks, and cavalry.'},
+  barracks:        {name:'Barracks',          w:2,h:2, cost:{metal:200,food:100}, maxLevel:5, prod:{}, desc:'Train infantry, tanks, and cavalry. Higher levels reduce troop food upkeep.'},
   farm:            {name:'Farm',              w:3,h:3, cost:{metal:100,food:50},  maxLevel:5, prod:{res:'food',base:12},  desc:'🌾 12 food/tick per level.'},
   housingBlock:    {name:'Housing Block',     w:2,h:2, cost:{metal:120},  maxLevel:5, prod:{res:'pop',base:2},   desc:'👥 +5 pop capacity per level.'},
   researchCenter:  {name:'Research Center',   w:2,h:2, cost:{metal:300,food:100}, maxLevel:5, prod:{res:'research',base:3}, desc:'⚛ 3 research/tick per level.'},
@@ -848,7 +848,12 @@ function _applyUpkeepCore() {
   ['infantry','tanks','cavalry'].forEach(ut => {
     totalTroops += (state.troops[ut].t1 || 0) + (state.troops[ut].t2 || 0) + (state.troops[ut].t3 || 0);
   });
-  const drain = totalTroops * 0.3;
+  const barracksLvl = state.planet.continents.reduce((max, c) => {
+    const b = c.bldgs.find(b => b.type === 'barracks');
+    return b ? Math.max(max, b.level || 1) : max;
+  }, 0);
+  const upkeepMult = 1 - Math.min(0.05 * barracksLvl, 0.25);
+  const drain = totalTroops * 0.3 * upkeepMult;
   const shortage = drain > state.res.food;
   state.res.food = Math.max(0, state.res.food - drain);
   if (shortage) {
@@ -2357,7 +2362,8 @@ function _battleTick() {
   const allEnemyDead  = inv.enemyUnits.every(u => !u.alive);
   const allPlayerDead = inv.playerUnits.every(u => !u.alive);
   if (allEnemyDead || allPlayerDead) {
-    _endBattle(allEnemyDead ? 'victory' : 'defeat');
+    // mutual destruction counts as a defeat, not a victory
+    _endBattle(allEnemyDead && !allPlayerDead ? 'victory' : 'defeat');
     return;
   }
   _maybeDestroyBuilding(inv, now);

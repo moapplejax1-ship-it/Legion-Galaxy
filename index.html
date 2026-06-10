@@ -163,11 +163,22 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
     </div>
   </div>
 
+  <!-- screen-faction -->
+  <div id="screen-faction" class="screen">
+    <div class="topbar">
+      <span class="topbar-title">☠ CHOOSE YOUR FACTION</span>
+    </div>
+    <div class="screen-body">
+      <div id="faction-list" style="display:flex;flex-direction:column;gap:12px"></div>
+    </div>
+  </div>
+
   <!-- screen-home -->
   <div id="screen-home" class="screen">
     <div class="topbar">
       <span class="topbar-title">☠ LEGION GALAXY</span>
-      <div style="display:flex;gap:6px">
+      <div style="display:flex;gap:6px;align-items:center">
+        <span id="faction-badge" class="res-badge" style="border-color:var(--rust)" title="Faction"></span>
         <button class="back-btn" onclick="manualSaveGame()">💾 SAVE</button>
         <button class="back-btn" onclick="openTroops()">🪖 TROOPS</button>
         <button class="back-btn" onclick="showSolarSystem()">⚡ SYSTEM</button>
@@ -296,6 +307,40 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 <script>
 
 // ─── SECTION 1: CONSTANTS ───────────────────────────────────────────────────
+
+// Faction definitions: pick at new-game, stored in state.faction.
+// Old saves with no faction field default to 'neutral' (all multipliers 1.0,
+// no bonuses or penalties — see deserializeState).
+const FACTION_DEFS = {
+  neutral: {
+    name:'Unaligned', icon:'◇', accent:'var(--text)',
+    flavor:'No faction allegiance. Balanced baseline stats.',
+    bonuses:[], penalties:[],
+    production:1, combatAtk:1, combatDef:1, research:1,
+  },
+  legion: {
+    name:'Legion', icon:'☠', accent:'var(--blood)',
+    flavor:'A militaristic order built for conquest. Soldiers train harder and hit harder, but the war machine drains the economy.',
+    bonuses:['+18% troop & ship attack', '+18% troop defense'],
+    penalties:['-10% resource production'],
+    production:0.90, combatAtk:1.18, combatDef:1.18, research:1,
+  },
+  consortium: {
+    name:'Consortium', icon:'⚙', accent:'var(--gold)',
+    flavor:'A trade syndicate optimized for output and growth. Factories run hot, but the militias are undertrained.',
+    bonuses:['+18% resource production'],
+    penalties:['-10% troop & ship attack', '-10% troop defense'],
+    production:1.18, combatAtk:0.90, combatDef:0.90, research:1,
+  },
+  synthesis: {
+    name:'Synthesis', icon:'◈', accent:'var(--steel)',
+    flavor:'A post-human research collective. Knowledge accelerates rapidly, but raw production lags behind.',
+    bonuses:['+20% research output'],
+    penalties:['-10% resource production'],
+    production:0.90, combatAtk:1, combatDef:1, research:1.20,
+  },
+};
+function getFaction() { return FACTION_DEFS[state.faction] || FACTION_DEFS.neutral; }
 
 const BUILDING_DEFS = {
   colonyCenter:    {name:'Colony Center',    w:2,h:2, cost:{metal:0},     maxLevel:5, prod:{}, desc:'Command hub. Gates max upgrade level of all structures.'},
@@ -548,6 +593,7 @@ const state = {
     {name:'Glacian Reach',   isHome:false, isAgri:false, col:[80,140,210],  colonized:false, inhospitable:true},
     {name:'Obsidian Drift',  isHome:false, isAgri:false, col:[140,90,190],  colonized:false, inhospitable:false},
   ],
+  faction:'neutral',
   selCont:0, selBldg:null, placing:null,
   researchDone: new Set(),
   troopResearchDone: new Set(),
@@ -811,6 +857,10 @@ function _productionTickForWorld(continents, resPool, isHome) {
         base *= bonus;
       }
       if (def.prod.res !== 'energy') base *= allProdBonus;
+      if (def.prod.res !== 'energy') {
+        if (def.prod.res === 'research') base *= getFaction().research;
+        else base *= getFaction().production;
+      }
       base *= odMult;
       resPool[def.prod.res] = (resPool[def.prod.res] || 0) + base;
     });
@@ -2565,10 +2615,10 @@ function getResearchBonus(key, subKey) {
   return _researchBonuses[key] || 0;
 }
 
-function getTroopAtkMult(unit) { return 1 + getResearchBonus('troopAtk', unit) + ((_researchBonuses.troopAtk && _researchBonuses.troopAtk.all) || 0); }
-function getTroopDefMult(unit) { return 1 + getResearchBonus('troopDef', unit) + ((_researchBonuses.troopDef && _researchBonuses.troopDef.all) || 0); }
+function getTroopAtkMult(unit) { return (1 + getResearchBonus('troopAtk', unit) + ((_researchBonuses.troopAtk && _researchBonuses.troopAtk.all) || 0)) * getFaction().combatAtk; }
+function getTroopDefMult(unit) { return (1 + getResearchBonus('troopDef', unit) + ((_researchBonuses.troopDef && _researchBonuses.troopDef.all) || 0)) * getFaction().combatDef; }
 function getShipHpMult()  { return 1 + getResearchBonus('shipHp'); }
-function getShipAtkMult() { return 1 + getResearchBonus('shipAtk'); }
+function getShipAtkMult() { return (1 + getResearchBonus('shipAtk')) * getFaction().combatAtk; }
 function getBuildSpdMult() { return 1 + getResearchBonus('buildSpd'); }
 
 function getResearchScreenHTML(activeTab) {
@@ -3832,6 +3882,13 @@ function _genCloudPath(cx, cy, rx, ry, pts, seed) {
 
 function renderHome() {
   renderAllResBars();
+  const badge = document.getElementById('faction-badge');
+  if (badge) {
+    const f = getFaction();
+    badge.textContent = `${f.icon} ${f.name.toUpperCase()}`;
+    badge.style.color = f.accent;
+    badge.style.borderColor = f.accent;
+  }
   const spPanel = document.getElementById('sp-locked');
   if (spPanel) spPanel.style.display = spUnlocked() ? 'none' : 'block';
   requestAnimationFrame(renderGlobeView);
@@ -4097,6 +4154,9 @@ function deserializeState(json) {
       if (sol && !sol.isHome && sol.colonized && !sol.res) sol.res = _seedColonyRes();
     });
   }
+  // Old saves predate factions — default to neutral (no bonuses/penalties)
+  // rather than retroactively applying any faction's modifiers.
+  if (loaded && !loaded.faction) loaded.faction = 'neutral';
   return loaded;
 }
 
@@ -4134,9 +4194,32 @@ function startNewGame() {
   if (hasSave() && !confirm('Starting a new campaign will erase your saved progress. Continue?')) return;
   localStorage.removeItem('lg_save');
   localStorage.removeItem('lg_save_time');
+  renderFactionSelect();
+  showScreen('faction');
+}
+
+function renderFactionSelect() {
+  const list = document.getElementById('faction-list');
+  list.innerHTML = Object.keys(FACTION_DEFS).filter(k => k !== 'neutral').map(key => {
+    const f = FACTION_DEFS[key];
+    const bonusHTML = f.bonuses.map(b => `<div style="color:#7fbf6a;font-size:10px">▲ ${b}</div>`).join('');
+    const penHTML = f.penalties.map(p => `<div style="color:#c85050;font-size:10px">▼ ${p}</div>`).join('');
+    return `
+      <div class="panel" style="border-color:${f.accent};background:rgba(255,255,255,0.03)">
+        <div style="font-size:14px;font-weight:900;letter-spacing:2px;color:${f.accent};margin-bottom:6px">${f.icon} ${f.name.toUpperCase()}</div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px">${f.flavor}</div>
+        ${bonusHTML}${penHTML}
+        <button class="action-btn" style="margin-top:10px;background:${f.accent};color:#000" onclick="selectFaction('${key}')">SELECT ${f.name.toUpperCase()}</button>
+      </div>`;
+  }).join('');
+}
+
+function selectFaction(key) {
+  if (!FACTION_DEFS[key]) return;
+  state.faction = key;
   showScreen('home');
   renderHome();
-  toast('// NEW CAMPAIGN STARTED //');
+  toast(`// CAMPAIGN STARTED: ${FACTION_DEFS[key].name.toUpperCase()} //`);
 }
 
 const OFFLINE_TICK_MS = 3000;

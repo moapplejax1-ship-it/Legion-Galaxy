@@ -312,6 +312,8 @@ const BUILDING_DEFS = {
   commodityExchange:{name:'Commodity Exchange',w:2,h:2,cost:{metal:400,food:100},maxLevel:3,prod:{},desc:'📦 Package resources into tradeable crates.'},
   defenseGrid:     {name:'Defense Grid',      w:2,h:1, cost:{metal:350},  maxLevel:5, prod:{}, desc:'🛡 Intercepts counter-attacks. Reduces adjacent threat.'},
   terraformer:     {name:'Terraformer',       w:3,h:2, cost:{metal:1000,research:300}, maxLevel:3, prod:{}, desc:'🌱 Transforms inhospitable planets.'},
+  turret:          {name:'Turret',            w:1,h:1, cost:{metal:180},  maxLevel:5, prod:{}, defense:8, desc:'🔫 Adds defense strength during ground invasions.'},
+  bunker:          {name:'Bunker',            w:2,h:2, cost:{metal:400,food:50}, maxLevel:5, prod:{}, defense:25, desc:'🏰 Hardened position. Adds significant defense strength during ground invasions.'},
 };
 
 const TROOP_DEFS = {
@@ -477,6 +479,10 @@ const BUILD_CATEGORIES = {
     label:'⚔ MILITARY', icon:'⚔',
     types:['barracks','defenseGrid']
   },
+  defense: {
+    label:'🛡 DEFENSE', icon:'🛡',
+    types:['turret','bunker']
+  },
   infrastructure: {
     label:'🏗 INFRA', icon:'🏗',
     types:['colonyCenter','housingBlock','spaceport','commodityExchange']
@@ -500,10 +506,20 @@ const CONT_OFFSETS = [
   {dx:-0.42,dy: 0.38,rw:0.22,rh:0.20},
   {dx: 0.38,dy: 0.32,rw:0.26,rh:0.21},
 ];
-const GCOLS = 14, GROWS = 10, CELL = 44;
-// Road network: a central cross dividing the grid into 4 buildable quadrants
-const ROAD_ROW = 5, ROAD_COL = 7;
-function isRoadCell(col, row) { return row === ROAD_ROW || col === ROAD_COL; }
+const GCOLS = 20, GROWS = 14, CELL = 36;
+// Road network: roads run every ROAD_SPACING_X columns / ROAD_SPACING_Y rows
+// (offset by ROAD_COL0/ROAD_ROW0), carving the grid into a denser network of
+// smaller buildable blocks instead of one central cross. Each block is
+// 4x4 cells, large enough for the biggest building (3x3 / 3x2).
+const ROAD_SPACING_X = 5, ROAD_COL0 = 4;
+const ROAD_SPACING_Y = 5, ROAD_ROW0 = 4;
+function isRoadCell(col, row) {
+  return (col % ROAD_SPACING_X === ROAD_COL0) || (row % ROAD_SPACING_Y === ROAD_ROW0);
+}
+// NOTE: existing saved building positions (col/row) from the old 14x10 grid
+// are left as-is on load. If they now fall on a road cell or off the grid
+// edge under the new layout, that's an accepted minor visual artifact for
+// this iteration — no migration logic is implemented.
 
 // ─── SECTION 2: STATE ────────────────────────────────────────────────────────
 
@@ -1779,8 +1795,30 @@ const BUILDING_DRAWERS = {
   powerRelay: drawPowerRelay, tradePost: drawTradePost, storehouse: drawStorehouse,
   excellorantFactory: drawExcellorantFactory, spaceport: drawSpaceport,
   commodityExchange: drawCommodityExchange, defenseGrid: drawDefenseGrid,
-  terraformer: drawTerraformer,
+  terraformer: drawTerraformer, turret: drawTurret, bunker: drawBunker,
 };
+
+function drawTurret(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#3a3a40';
+  ctx.fillRect(px + 1, py + ph * 0.5, pw - 2, ph * 0.5 - 1);
+  ctx.fillStyle = '#7a8a9a';
+  ctx.beginPath();
+  ctx.arc(px + pw / 2, py + ph * 0.5, pw * 0.32, Math.PI, 0);
+  ctx.fill();
+  ctx.fillStyle = '#a0b0c0';
+  ctx.fillRect(px + pw / 2, py + ph * 0.18, pw * 0.4, ph * 0.12);
+}
+
+function drawBunker(ctx, px, py, pw, ph) {
+  ctx.fillStyle = '#2a3028';
+  ctx.fillRect(px + 1, py + ph * 0.35, pw - 2, ph * 0.65 - 1);
+  ctx.fillStyle = '#50584a';
+  ctx.beginPath();
+  ctx.arc(px + pw / 2, py + ph * 0.35, pw * 0.45, Math.PI, 0);
+  ctx.fill();
+  ctx.fillStyle = '#1a1a18';
+  ctx.fillRect(px + pw * 0.4, py + ph * 0.55, pw * 0.2, ph * 0.3);
+}
 
 function drawGridBuilding(ctx, bldg, cellSize, now) {
   const def = BUILDING_DEFS[bldg.type];
@@ -1855,15 +1893,27 @@ function drawContinentMap(canvas, cont) {
   for (let r = 0; r <= GROWS; r++) {
     ctx.beginPath(); ctx.moveTo(0, r * CELL); ctx.lineTo(W, r * CELL); ctx.stroke();
   }
-  // road network — central cross marking buildable quadrants
+  // road network — grid of roads dividing the map into many small blocks
   ctx.fillStyle = 'rgba(60,60,68,0.85)';
-  ctx.fillRect(0, ROAD_ROW * CELL, W, CELL);
-  ctx.fillRect(ROAD_COL * CELL, 0, CELL, H);
+  for (let r = 0; r < GROWS; r++) {
+    if (r % ROAD_SPACING_Y === ROAD_ROW0) ctx.fillRect(0, r * CELL, W, CELL);
+  }
+  for (let c = 0; c < GCOLS; c++) {
+    if (c % ROAD_SPACING_X === ROAD_COL0) ctx.fillRect(c * CELL, 0, CELL, H);
+  }
   ctx.strokeStyle = 'rgba(255,210,80,0.5)';
   ctx.lineWidth = 2;
   ctx.setLineDash([10, 10]);
-  ctx.beginPath(); ctx.moveTo(0, ROAD_ROW * CELL + CELL / 2); ctx.lineTo(W, ROAD_ROW * CELL + CELL / 2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(ROAD_COL * CELL + CELL / 2, 0); ctx.lineTo(ROAD_COL * CELL + CELL / 2, H); ctx.stroke();
+  for (let r = 0; r < GROWS; r++) {
+    if (r % ROAD_SPACING_Y === ROAD_ROW0) {
+      ctx.beginPath(); ctx.moveTo(0, r * CELL + CELL / 2); ctx.lineTo(W, r * CELL + CELL / 2); ctx.stroke();
+    }
+  }
+  for (let c = 0; c < GCOLS; c++) {
+    if (c % ROAD_SPACING_X === ROAD_COL0) {
+      ctx.beginPath(); ctx.moveTo(c * CELL + CELL / 2, 0); ctx.lineTo(c * CELL + CELL / 2, H); ctx.stroke();
+    }
+  }
   ctx.setLineDash([]);
   // buildings
   const now = Date.now();
@@ -1998,15 +2048,34 @@ function _makeUnit(side, type, tier, x, y) {
   };
 }
 
+// Sums the `defense` stat of all built defense structures (turret, bunker, ...)
+// on a continent, scaled by level. Feeds into defender strength during
+// ground invasion (see _genEnemyUnits).
+function getContDefenseBonus(cont) {
+  if (!cont || !cont.bldgs) return 0;
+  return cont.bldgs.reduce((sum, b) => {
+    const def = BUILDING_DEFS[b.type];
+    if (!def || !def.defense || !b.built) return sum;
+    return sum + def.defense * b.level;
+  }, 0);
+}
+
 function _genEnemyUnits(aliens, contIdx) {
   const units = [];
   const W = 400;
   const rng = mkRng(strSeed('aliens' + contIdx));
+  const cont = getActiveContinents()[contIdx];
+  const defBonus = getContDefenseBonus(cont);
+  // Defense buildings add to defender strength: each point of `defense`
+  // adds a small flat bonus to enemy unit `def` (damage reduction stat).
+  const defMult = 1 + defBonus * 0.01;
   const addUnits = (type, count, tier) => {
     for (let i = 0; i < count; i++) {
       const x = 20 + rng() * (W - 40);
       const y = 20 + rng() * 80;
-      units.push(_makeUnit('enemy', type, tier, x, y));
+      const u = _makeUnit('enemy', type, tier, x, y);
+      u.def *= defMult;
+      units.push(u);
     }
   };
   if (aliens.infantry > 0) addUnits('infantry', Math.min(aliens.infantry, 40), 1);
@@ -2201,6 +2270,29 @@ function _drawBattlefield(canvas, now) {
       ctx.fillRect(x, wallY - 6, 14, 8);
     }
   }
+  // render the defending continent's placed buildings as small silhouettes
+  // scattered across the battlefield (no precise spatial correlation needed)
+  if (cont.bldgs && cont.bldgs.length) {
+    const cols = 8;
+    const cellW = W / cols, cellH = 18;
+    cont.bldgs.forEach((b, i) => {
+      const def = BUILDING_DEFS[b.type];
+      if (!def) return;
+      const px = (i % cols) * cellW + cellW * 0.15;
+      const py = H * 0.06 + Math.floor(i / cols) * cellH;
+      const pw = cellW * 0.7, ph = cellH * 0.8;
+      ctx.save();
+      if (b._destroyed) ctx.globalAlpha = Math.max(0, 1 - (now - b._destroyedAt) / 600);
+      const drawer = BUILDING_DRAWERS[b.type];
+      if (b._destroyed) ctx.filter = 'grayscale(1)';
+      if (drawer) drawer(ctx, px, py, pw, ph, b.level);
+      else { ctx.fillStyle = '#445'; ctx.fillRect(px, py, pw, ph); }
+      ctx.filter = 'none';
+      ctx.restore();
+    });
+    // remove fully-faded destroyed buildings
+    cont.bldgs = cont.bldgs.filter(b => !b._destroyed || (now - b._destroyedAt) < 600);
+  }
   inv.playerUnits.forEach(u => _drawUnit(ctx, u, W, H, now));
   inv.enemyUnits.forEach(u  => _drawUnit(ctx, u, W, H, now));
   if (inv.phase === 'done' && inv.battleResult) {
@@ -2266,7 +2358,43 @@ function _battleTick() {
   const allPlayerDead = inv.playerUnits.every(u => !u.alive);
   if (allEnemyDead || allPlayerDead) {
     _endBattle(allEnemyDead ? 'victory' : 'defeat');
+    return;
   }
+  _maybeDestroyBuilding(inv, now);
+}
+
+// Periodically, if attackers (player) are currently winning the round
+// (more living player units than enemy units, or roughly even HP), a
+// building on the defending continent is destroyed as a side-effect of
+// the assault. Weighted toward defense buildings first.
+//
+// SAFEGUARD — starting continent immunity: continent index 0 of the
+// player's HOME planet (state.planet.continents[0]) is the continent the
+// player started on. It must never have buildings destroyed by this
+// mechanic (this guards against any future scenario where continent 0 is
+// re-invaded/recaptured, or a counter-attack-style feature targets it).
+// Off-world continent 0 of a colonized world is NOT protected.
+function _maybeDestroyBuilding(inv, now) {
+  if (inv._lastDestroyCheck && now - inv._lastDestroyCheck < 2000) return;
+  inv._lastDestroyCheck = now;
+  const isHomeContZero = (state._invasionTarget === null || state._invasionTarget === undefined) && inv.contIdx === 0;
+  if (isHomeContZero) return; // home starting continent: never destructible
+  const cont = getActiveContinents()[inv.contIdx];
+  if (!cont || !cont.bldgs || !cont.bldgs.length) return;
+  const aliveAttackers = inv.playerUnits.filter(u => u.alive).length;
+  const aliveDefenders = inv.enemyUnits.filter(u => u.alive).length;
+  if (aliveAttackers <= aliveDefenders) return; // attackers must be "winning"
+  const candidates = cont.bldgs.filter(b => !b._destroyed);
+  if (!candidates.length) return;
+  if (mkRng(now & 0xffff)() > 0.35) return; // not every check destroys something
+  // weight toward defense buildings first
+  const defenseBldgs = candidates.filter(b => BUILDING_DEFS[b.type] && BUILDING_DEFS[b.type].defense);
+  const pool = defenseBldgs.length ? defenseBldgs : candidates;
+  const victim = pool[Math.floor(Math.random() * pool.length)];
+  victim._destroyed = true;
+  victim._destroyedAt = now;
+  const name = BUILDING_DEFS[victim.type] ? BUILDING_DEFS[victim.type].name.toUpperCase() : victim.type.toUpperCase();
+  toast('// ENEMY ' + name + ' DESTROYED //');
 }
 
 function engageInvasion() {
@@ -3406,7 +3534,9 @@ function getDefenseGridDetailHTML(bldg) {
 
 function _counterAttackTick() {
   const continents = state.planet.continents;
-  const conquered  = continents.filter(c => c.conquered);
+  // Continent 0 is the player's starting/home continent and must never be
+  // a target of enemy ground invasions/counter-attacks.
+  const conquered  = continents.filter((c, i) => c.conquered && i !== 0);
   const unconquered = continents.filter(c => !c.conquered);
   if (conquered.length === 0 || unconquered.length === 0) return;
   const rng = mkRng(Date.now() & 0xffff);

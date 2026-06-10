@@ -488,6 +488,9 @@ const CONT_OFFSETS = [
   {dx: 0.38,dy: 0.32,rw:0.26,rh:0.21},
 ];
 const GCOLS = 14, GROWS = 10, CELL = 44;
+// Road network: a central cross dividing the grid into 4 buildable quadrants
+const ROAD_ROW = 5, ROAD_COL = 7;
+function isRoadCell(col, row) { return row === ROAD_ROW || col === ROAD_COL; }
 
 // ─── SECTION 2: STATE ────────────────────────────────────────────────────────
 
@@ -975,6 +978,7 @@ function canPlace(cont, col, row, type) {
   for (let dr = 0; dr < def.h; dr++) {
     for (let dc = 0; dc < def.w; dc++) {
       if (occ.has((col + dc) + ',' + (row + dr))) return false;
+      if (isRoadCell(col + dc, row + dr)) return false;
     }
   }
   return true;
@@ -1771,6 +1775,16 @@ function drawContinentMap(canvas, cont) {
   for (let r = 0; r <= GROWS; r++) {
     ctx.beginPath(); ctx.moveTo(0, r * CELL); ctx.lineTo(W, r * CELL); ctx.stroke();
   }
+  // road network — central cross marking buildable quadrants
+  ctx.fillStyle = 'rgba(60,60,68,0.85)';
+  ctx.fillRect(0, ROAD_ROW * CELL, W, CELL);
+  ctx.fillRect(ROAD_COL * CELL, 0, CELL, H);
+  ctx.strokeStyle = 'rgba(255,210,80,0.5)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([10, 10]);
+  ctx.beginPath(); ctx.moveTo(0, ROAD_ROW * CELL + CELL / 2); ctx.lineTo(W, ROAD_ROW * CELL + CELL / 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ROAD_COL * CELL + CELL / 2, 0); ctx.lineTo(ROAD_COL * CELL + CELL / 2, H); ctx.stroke();
+  ctx.setLineDash([]);
   // buildings
   const now = Date.now();
   cont.bldgs.forEach(b => drawGridBuilding(ctx, b, CELL, now));
@@ -2037,22 +2051,50 @@ function _drawUnit(ctx, u, W, H, now) {
   const baseColor = isPlayer
     ? (flash ? '#ffffff' : `rgba(40,120,255,${0.7 + hpRatio * 0.3})`)
     : (flash ? '#ffffff' : `rgba(255,40,40,${0.7 + hpRatio * 0.3})`);
+  const tier = u.tier || 1;
+  const sizeMult = 1 + (tier - 1) * 0.18; // bigger silhouette per tier
   if (u.type === 'infantry') {
     ctx.beginPath();
-    ctx.arc(u.x, u.y, 8, 0, Math.PI * 2);
+    ctx.arc(u.x, u.y, 8 * sizeMult, 0, Math.PI * 2);
     ctx.fillStyle = baseColor;
     ctx.fill();
   } else if (u.type === 'tanks') {
+    const s = 14 * sizeMult;
     ctx.fillStyle = baseColor;
-    ctx.fillRect(u.x - 7, u.y - 7, 14, 14);
+    ctx.fillRect(u.x - s/2, u.y - s/2, s, s);
   } else if (u.type === 'cavalry') {
+    const s = 9 * sizeMult;
     ctx.beginPath();
-    ctx.moveTo(u.x, u.y - 9);
-    ctx.lineTo(u.x + 8, u.y + 7);
-    ctx.lineTo(u.x - 8, u.y + 7);
+    ctx.moveTo(u.x, u.y - s);
+    ctx.lineTo(u.x + s*0.9, u.y + s*0.78);
+    ctx.lineTo(u.x - s*0.9, u.y + s*0.78);
     ctx.closePath();
     ctx.fillStyle = baseColor;
     ctx.fill();
+  }
+  // tier rank pips (gold dots above unit) — T1=1, T2=2, T3=3
+  const pipColor = '#ffd700';
+  const pipR = 1.6;
+  const pipSpacing = 4.5;
+  const pipsW = (tier - 1) * pipSpacing;
+  for (let i = 0; i < tier; i++) {
+    ctx.beginPath();
+    ctx.arc(u.x - pipsW/2 + i * pipSpacing, u.y - 17, pipR, 0, Math.PI * 2);
+    ctx.fillStyle = pipColor;
+    ctx.fill();
+  }
+  // tier outline ring for T2/T3 — extra ring for T3
+  if (tier >= 2) {
+    ctx.strokeStyle = tier >= 3 ? '#ffe066' : 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(u.x, u.y, 8 * sizeMult + 3, 0, Math.PI * 2);
+    ctx.stroke();
+    if (tier >= 3) {
+      ctx.beginPath();
+      ctx.arc(u.x, u.y, 8 * sizeMult + 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
   // HP bar
   ctx.fillStyle = '#333';

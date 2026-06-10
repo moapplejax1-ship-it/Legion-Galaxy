@@ -72,6 +72,19 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 #modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:200;padding:16px;overflow-y:auto}
 #modal-box{background:var(--plate);border:1px solid var(--rust);max-width:480px;margin:0 auto;padding:16px}
 #modal-box::before{content:'';display:block;width:36px;height:3px;background:var(--rust);margin:0 auto 12px;opacity:.8}
+#modal-box.wide{max-width:640px}
+
+/* Research tree */
+.rtabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;position:sticky;top:0;background:var(--plate);padding-bottom:8px;z-index:1}
+.rtab{background:var(--plate2);color:var(--muted);border:1px solid var(--edge);padding:8px 10px;font-size:11px;font-weight:900;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase;border-radius:2px}
+.rtab.active{background:var(--rust);color:#fff;border-color:var(--rust)}
+.ritems{display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow-y:auto;padding-right:4px}
+.ri{padding:12px;border-radius:2px;background:var(--plate2);font-size:13px;line-height:1.6}
+.ri b{font-size:14px;display:block;margin-bottom:4px;color:var(--text)}
+.ri-eff{font-size:11px;color:var(--mil);margin:4px 0;line-height:1.5}
+.ri-pre{font-size:10px;color:var(--muted);margin-bottom:8px}
+.ri button{width:100%;background:var(--rust);color:#fff;border:none;padding:10px;font-size:11px;font-weight:900;letter-spacing:1px;cursor:pointer;font-family:inherit;text-transform:uppercase;border-radius:2px;min-height:40px}
+.ri button:disabled{background:var(--plate);color:var(--muted);opacity:0.5;cursor:default}
 
 /* Toast */
 #toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--plate);border:1px solid var(--rust);padding:8px 16px;font-size:11px;font-weight:700;letter-spacing:1px;pointer-events:none;opacity:0;transition:opacity 0.3s;z-index:300;white-space:nowrap}
@@ -534,10 +547,14 @@ function toast(msg) {
   _toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
 }
 
-function closeModal() { document.getElementById('modal-overlay').style.display = 'none'; }
-function openModal(title, bodyHTML) {
+function closeModal() {
+  document.getElementById('modal-overlay').style.display = 'none';
+  document.getElementById('modal-box').classList.remove('wide');
+}
+function openModal(title, bodyHTML, opts) {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = bodyHTML;
+  document.getElementById('modal-box').classList.toggle('wide', !!(opts && opts.wide));
   document.getElementById('modal-overlay').style.display = 'block';
 }
 
@@ -1866,12 +1883,21 @@ function openInvasion(contIdx) {
   if (cont.aliens) {
     state.invasion.enemyUnits = _genEnemyUnits(cont.aliens, contIdx);
   }
+  const titleEl = document.getElementById('inv-title');
+  if (titleEl) titleEl.textContent = '⚔ INVADE: ' + cont.name;
+  const backBtn = document.getElementById('inv-back');
+  if (backBtn) {
+    backBtn.onclick = () => {
+      if (_battleRafId) { cancelAnimationFrame(_battleRafId); _battleRafId = null; }
+      openContinent(contIdx);
+    };
+  }
   showScreen('invasion');
   renderInvasionDeploy();
 }
 
 function renderInvasionDeploy() {
-  const el = document.getElementById('invasion-body');
+  const el = document.getElementById('inv-body');
   if (!el) return;
   const inv = state.invasion;
   const cont = state.planet.continents[inv.contIdx];
@@ -1905,7 +1931,7 @@ function setDeployUnit(type, tier) {
 }
 
 function setupInvasionCanvas() {
-  const canvas = document.getElementById('invasion-canvas');
+  const canvas = document.getElementById('invasion-map');
   if (!canvas) return;
   canvas.width  = canvas.parentElement ? (canvas.parentElement.clientWidth || 400) : 400;
   canvas.height = 240;
@@ -2076,7 +2102,7 @@ function engageInvasion() {
   state.invasion.phase = 'battle';
   if (_battleInterval) clearInterval(_battleInterval);
   _battleInterval = setInterval(_battleTick, 50);
-  const canvas = document.getElementById('invasion-canvas');
+  const canvas = document.getElementById('invasion-map');
   if (!canvas) return;
   canvas.onclick = null;
   const loop = (now) => {
@@ -2092,7 +2118,7 @@ function _endBattle(result) {
   if (_battleRafId)    { cancelAnimationFrame(_battleRafId); _battleRafId = null; }
   state.invasion.phase = 'done';
   state.invasion.battleResult = result;
-  const canvas = document.getElementById('invasion-canvas');
+  const canvas = document.getElementById('invasion-map');
   if (canvas) _drawBattlefield(canvas, Date.now());
   const lossMult = result === 'victory' ? 0.10 : 0.30;
   const survivalBonus = getResearchBonus('survivalChance');
@@ -2102,7 +2128,7 @@ function _endBattle(result) {
       state.troops[ut][tier] = Math.floor((state.troops[ut][tier] || 0) * (1 - effectiveLoss));
     });
   });
-  const el = document.getElementById('invasion-body');
+  const el = document.getElementById('inv-body');
   if (el) {
     const cont = state.planet.continents[state.invasion.contIdx];
     const resultMsg = result === 'victory' ? '// VICTORY //' : '// DEFEAT //';
@@ -2259,7 +2285,7 @@ function getResearchScreenHTML(activeTab) {
 }
 
 function openResearchScreen(tabKey) {
-  openModal('Research', getResearchScreenHTML(tabKey || 'military'));
+  openModal('Research', getResearchScreenHTML(tabKey || 'military'), {wide: true});
 }
 
 // ─── SECTION 9: FLEET V2 SYSTEM ──────────────────────────────────────────────

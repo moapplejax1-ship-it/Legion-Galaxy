@@ -3055,9 +3055,21 @@ function showSolarSystem() {
   if (el) {
     let html = '<div class="solar-grid">';
     state.solar.forEach((sol, idx) => {
-      const canColonize = spUnlocked() && !sol.colonized && !sol.inhospitable;
+      const hasDoctrine = state.researchV2.has('colonizationDoctrine');
+      const atMax = colonyCount() >= MAX_COLONIES;
+      const canColonize = spUnlocked() && !sol.colonized && !sol.inhospitable && hasDoctrine && !atMax;
       const colonizeCost = 1000 + idx * 500;
       const tfProg = sol.inhospitable ? Math.floor(getTerraformingProgress(idx) * 100) : 100;
+      let colonizeBtn = '';
+      if (!sol.colonized && !sol.inhospitable && spUnlocked()) {
+        if (canColonize) {
+          colonizeBtn = `<button onclick="colonizePlanet(${idx})">COLONIZE (${colonizeCost} metal)</button>`;
+        } else if (!hasDoctrine) {
+          colonizeBtn = `<span class="tag-locked">🔒 Requires Colonization Doctrine research</span>`;
+        } else if (atMax) {
+          colonizeBtn = `<span class="tag-locked">🔒 Max colonies reached (${colonyCount()}/${MAX_COLONIES})</span>`;
+        }
+      }
       html += `<div class="solar-card">
         <canvas id="planet-canvas-${idx}" width="80" height="80"></canvas>
         <div class="solar-info">
@@ -3065,7 +3077,7 @@ function showSolarSystem() {
           Status: ${sol.colonized ? 'COLONIZED' : 'UNCLAIMED'}<br>
           ${sol.inhospitable ? `Inhospitable — Terraform: ${tfProg}%` : ''}
           ${!sol.colonized && sol.inhospitable ? `<button onclick="sendTerraformingResources(${idx},'metal',500)">TF +500m</button>` : ''}
-          ${canColonize ? `<button onclick="colonizePlanet(${idx})">COLONIZE (${colonizeCost} metal)</button>` : ''}
+          ${colonizeBtn}
           ${sol.colonized && !sol.isHome ? '<span class="tag-col">Active</span>' : ''}
         </div>
       </div>`;
@@ -3081,10 +3093,18 @@ function showSolarSystem() {
   showScreen('solar');
 }
 
+const MAX_COLONIES = 4; // plus homeworld = 5 systems total
+
+function colonyCount() {
+  return state.solar.filter(s => s.colonized && !s.isHome).length;
+}
+
 function colonizePlanet(idx) {
   if (!spUnlocked()) { toast('// NEED 3 CONTINENTS + SPACEPORT //'); return; }
   const sol = state.solar[idx];
   if (!sol || sol.colonized) return;
+  if (!state.researchV2.has('colonizationDoctrine')) { toast('// REQUIRES COLONIZATION DOCTRINE RESEARCH //'); return; }
+  if (colonyCount() >= MAX_COLONIES) { toast(`// MAX COLONIES REACHED (${MAX_COLONIES}) //`); return; }
   if (sol.inhospitable) { toast('// TERRAFORM FIRST //'); return; }
   if (getFleetGarrison(idx)) { toast('// CLEAR ENEMY FLEET FIRST //'); return; }
   const cost = 1000 + idx * 500;

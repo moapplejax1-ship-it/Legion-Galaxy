@@ -655,6 +655,11 @@ function _getOverdriveMult(bldgUid) {
 }
 
 function productionTick() {
+  _productionTickCore();
+  renderAllResBars();
+}
+
+function _productionTickCore() {
   applyEnergy();
   const allProdBonus = 1 + getResearchBonus('allProduction');
   state.planet.continents.forEach(c => {
@@ -701,6 +706,10 @@ function productionTick() {
 }
 
 function applyUpkeep() {
+  if (_applyUpkeepCore()) toast('// FOOD SHORTAGE — DESERTION //');
+}
+
+function _applyUpkeepCore() {
   let totalTroops = 0;
   ['infantry','tanks','cavalry'].forEach(ut => {
     totalTroops += (state.troops[ut].t1 || 0) + (state.troops[ut].t2 || 0) + (state.troops[ut].t3 || 0);
@@ -714,9 +723,9 @@ function applyUpkeep() {
         state.troops[ut][tier] = Math.floor((state.troops[ut][tier] || 0) * 0.95);
       });
     });
-    toast('// FOOD SHORTAGE — DESERTION //');
   }
   if (typeof applyFleetUpkeep === 'function') applyFleetUpkeep();
+  return shortage;
 }
 
 function getTradeRates(now) {
@@ -3036,12 +3045,42 @@ function startNewGame() {
   toast('// NEW CAMPAIGN STARTED //');
 }
 
+const OFFLINE_TICK_MS = 3000;
+const OFFLINE_MAX_SECONDS = 8 * 3600; // cap offline progress at 8 hours
+
+function applyOfflineProgress() {
+  const lastT = parseInt(localStorage.getItem('lg_save_time') || '0', 10);
+  if (!lastT) return false;
+  let elapsedSec = Math.floor((Date.now() - lastT) / 1000);
+  if (elapsedSec < OFFLINE_TICK_MS / 1000) return false;
+  const capped = elapsedSec > OFFLINE_MAX_SECONDS;
+  if (capped) elapsedSec = OFFLINE_MAX_SECONDS;
+  const ticks = Math.floor((elapsedSec * 1000) / OFFLINE_TICK_MS);
+  if (ticks <= 0) return false;
+  let shortage = false;
+  for (let i = 0; i < ticks; i++) {
+    _productionTickCore();
+    if (_applyUpkeepCore()) shortage = true;
+    _terraformingTick();
+  }
+  if (typeof _shipBuildTick === 'function') _shipBuildTick();
+  enforceStorageCaps();
+  renderAllResBars();
+
+  const mins = Math.floor(elapsedSec / 60);
+  const hrs = Math.floor(mins / 60);
+  const timeStr = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins}m`;
+  toast(`// WELCOME BACK — ${timeStr} PASSED${capped ? ' (capped at 8h)' : ''} //`);
+  if (shortage) setTimeout(() => toast('// FOOD SHORTAGES OCCURRED WHILE AWAY //'), 3000);
+  return true;
+}
+
 function continueGame() {
   if (loadGame()) {
     showScreen('home');
     applyResearchEffects();
     renderHome();
-    toast('// GAME LOADED //');
+    if (!applyOfflineProgress()) toast('// GAME LOADED //');
   } else {
     toast('// NO SAVE FOUND //');
   }
